@@ -1,0 +1,72 @@
+
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-13326-qtconnectivity-6.8.diff (#22)
+   - qtconnectivity/src/nfc/qndefnfctextrecord.cpp
+   - qtconnectivity/tests/auto/qndefrecord/tst_qndefrecord.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-19248-qtbase-6.8.diff (#23)
+   - qtbase/src/xml/dom/qdom.cpp
+   - qtbase/tests/auto/xml/dom/qdom/tst_qdom.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-76151-qtbase-6.8.diff (#24)
+   - qtbase/src/network/access/qnetworkcookie.cpp
+   - qtbase/src/network/access/qnetworkcookie_p.h
+   - qtbase/src/network/access/qnetworkreplyhttpimpl.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-78253-qtbase-6.8.diff (#25)
+   - qtbase/src/corelib/serialization/qxmlstream.cpp
+   - qtbase/tests/auto/corelib/serialization/qxmlstream/tst_qxmlstream.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-79616-qtdeclarative-6.8.diff (#26)
+   - qtdeclarative/src/quick/util/qquicksvgparser.cpp
+   - qtdeclarative/src/quick/util/qquicksvgparser_p.h
+   - qtdeclarative/tests/auto/quick/qquickcanvasitem/data/tst_svgpath.qml
+   - qtdeclarative/tests/auto/quick/qquickpath/tst_qquickpath.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-82292-qtbase-6.8.diff (#27)
+   - qtbase/src/xml/dom/qdomhelpers.cpp
+   - qtbase/tests/auto/xml/dom/qdom/tst_qdom.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-16762-qtbase-6.8-0001.diff (#28)
+   - qtbase/src/corelib/serialization/qxmlstream.cpp
+   - qtbase/tests/auto/corelib/serialization/qxmlstream/tst_qxmlstream.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-16762-qtbase-6.8-0002.diff (#29)
+   - qtbase/src/corelib/serialization/qxmlstream.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-101201-qtqt5compat-6.8-0001.diff (#30)
+   - qt5compat/src/core5/serialization/qbinaryjson.cpp
+   - qt5compat/tests/auto/core5/serialization/json/tst_qtjson.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-101201-qtqt5compat-6.8-0002.diff (#31)
+   - qt5compat/src/core5/serialization/qbinaryjson.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-8168-qtsvg-6.8.zip: (#32)
+   - CVE-2026-8168-qtsvg-6.8-0001.diff
+      - qtsvg/src/svg/qsvgnode.cpp
+      - qtsvg/src/svg/qsvgstyle_p.h
+      - qtsvg/src/svg/qsvgtinydocument.cpp
+      - qtsvg/src/svg/qtsvgglobal_p.h
+   - CVE-2026-8168-qtsvg-6.8-0002.diff
+      - qtsvg/src/svg/qsvgstructure.cpp
+      - qtsvg/src/svg/qsvgstructure_p.h
+   - CVE-2026-8168-qtsvg-6.8-0003.diff
+      - qtsvg/src/svg/qsvghandler.cpp
+      - qtsvg/src/svg/qsvghandler_p.h
+      - qtsvg/src/svg/qsvgstyle.cpp
+      - qtsvg/src/svg/qsvgstyle_p.h
+      - qtsvg/tests/auto/qsvgrenderer/tst_qsvgrenderer.cpp
+   - CVE-2026-8168-qtsvg-6.8-0004.diff
+      - qtsvg/tests/auto/qsvgrenderer/tst_qsvgrenderer.cpp
+   - CVE-2026-8168-qtsvg-6.8-0005.diff
+      - qtsvg/tests/baseline/data/bugs/deeplyNested.svg (new file)
+   - CVE-2026-8168-qtsvg-6.8-0006.diff
+      - qtsvg/src/svg/qsvgstructure.cpp
+   - CVE-2026-8168-qtsvg-6.8-0007.diff
+      - qtsvg/src/svg/qsvghandler.cpp
+   - CVE-2026-8168-qtsvg-6.8-0008.diff
+      - qtsvg/src/svg/qsvghandler.cpp
+   - CVE-2026-8168-qtsvg-6.8-0009.diff
+      - qtsvg/src/svg/qsvgnode.cpp
+   - CVE-2026-8168-qtsvg-6.8-0010.diff
+      - qtsvg//src/svg/qsvgstructure.cpp
+      - qtsvg//src/svg/qsvgstructure_p.h
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-105923-qtbase-6.8-0001.diff (#33)
+   - qtbase/src/gui/painting/qtriangulator.cpp
+   - qtbase/tests/auto/gui/painting/CMakeLists.txt
+   - qtbase/tests/auto/gui/painting/qtriangulator/CMakeLists.txt (new file)
+   - qtbase/tests/auto/gui/painting/qtriangulator/tst_qtriangulator.cpp (new file)
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-96432-qtbase-6.8.diff (#34)
+   - qtbase/src/network/access/qhttp2connection.cpp
+   - qtbase/tests/auto/network/access/qhttp2connection/tst_qhttp2connection.cpp
+- qtactiveqt\tests\auto\conversion\tst_conversion.cpp: 
+   Fixed compile error: wrong path to include qaxobject.h

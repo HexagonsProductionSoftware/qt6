@@ -1,0 +1,31 @@
+dependencies:
+  ../tqtc-qtdeclarative:
+    ref: 81e6f7a3dd6204c13e2e6776adeada7f07a58122
+    required: true
+  ../tqtc-qtgraphs:
+    ref: c67fe88920ed588f67aedc3a600501f1ab0c71fc
+    required: false
+  ../tqtc-qthttpserver:
+    ref: 303b3c398070266f9cde66e0b29d43da13019ab9
+    required: false
+  ../tqtc-qtlocation:
+    ref: d5bb3e4680518642e338481eea817d3229c7f5cd
+    required: false
+  ../tqtc-qtmultimedia:
+    ref: edfd287109e53106d181bcf7dded3fca0fc38d66
+    required: false
+  ../tqtc-qtpositioning:
+    ref: e6a617918f5f7c191b4df22a98a6add6cea175b1
+    required: false
+  ../tqtc-qtshadertools:
+    ref: 9d4ccc6a0b418926eefba545b9dfe41a8ce35479
+    required: false
+  ../tqtc-qttools:
+    ref: 6029f231ceb59d862ab47ad9488a411a60367f23
+    required: true
+  ../tqtc-qtwebengine:
+    ref: 6f0b0d9ebd62e01ed1f99e36e948468c8b9bd206
+    required: false
+  ../tqtc-qtwebsockets:
+    ref: e4f38351b1b63697099b59d597e5519f4c0058b0
+    required: false
