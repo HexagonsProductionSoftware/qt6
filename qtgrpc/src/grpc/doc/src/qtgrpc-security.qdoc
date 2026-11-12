@@ -1,0 +1,84 @@
+// Copyright (C) 2025 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GFDL-1.3-no-invariants-only
+
+/*!
+    \page qtgrpc-security.html
+    \title Qt GRPC Security Considerations
+
+    \brief Security considerations for Qt GRPC
+
+    If you are using \l{Qt GRPC}, consider security aspects
+    to protect users, network traffic, and hardware from threats.
+
+    Here are some strategies to consider:
+    \list
+    \li Use encryption when sending or receiving data. Encrypted data
+        adds protection against eavesdropping and similar attacks.
+        \l{Qt Network} provides support for TLS encryption which can use
+        different TLS backends and ciphers. For more information, see
+        \l{Secure Sockets Layer (SSL) Classes}.
+
+    \li Use strong authentication and authorization mechanisms.
+        To accommodate different users on different platforms, you may choose
+        to use several OAuth2 and OpenID-based services. Qt offers support
+        for these APIs through the \l{Qt Network Authorization} module.
+
+    \li Validate and process untrusted data safely. Input fields and other
+        incoming data are vulnerable to injection attacks.
+        For more information, see \l{Handling Untrusted Data}.
+
+    \li Limit the maximum incoming message size. By default, QtGrpc rejects
+        incoming messages larger than 4 MiB (matching the \gRPC specification).
+        The limit applies to the decoded gRPC frame payload after
+        transport-level decryption and any per-message decompression. You can
+        raise or lower it per channel or per individual RPC using
+        \l{QGrpcChannelOptions::setMaximumReceiveMessageSize()} or
+        \l{QGrpcCallOptions::setMaximumReceiveMessageSize()}. The value is used
+        verbatim: a value of \c 0 accepts only empty messages (such as
+        \c google.protobuf.Empty), and to allow larger messages you set the
+        limit accordingly, up to the transport's own maximum.
+        QGrpcHttp2Channel uses the \c{QT_GRPC_MAXIMUM_RECEIVE_MESSAGE_SIZE}
+        environment variable as a fallback when the option is not set
+        explicitly. If the environment variable is not set, the default value
+        is used. See \l{Environment variable fallbacks}.
+
+    \li Use exponential backoff to limit reconnection attempts. When a server
+        drops the connection, a client that reconnects without any delay can
+        exhaust local file descriptors, CPU, and network bandwidth. By default,
+        QtGrpc applies exponential backoff with jitter between reconnection
+        attempts, with an initial interval of 1 second, a multiplier of 1.6,
+        and a maximum of 120 seconds (matching the \gRPC specification). The
+        backoff resets automatically when the server acknowledges the
+        connection. QGrpcHttp2Channel reads the initial and maximum intervals,
+        as well as the per-attempt connect timeout, from the
+        \c{QT_GRPC_INITIAL_RECONNECT_BACKOFF_MS},
+        \c{QT_GRPC_MAXIMUM_RECONNECT_BACKOFF_MS}, and
+        \c{QT_GRPC_CONNECT_TIMEOUT_MS} environment variables. If they are not
+        set, the default values are used. See \l{Environment variable
+        fallbacks}.
+
+    \li Limit the maximum incoming metadata size. By default, QtGrpc applies a
+        16 KiB limit (matching the \gRPC specification). The limit covers all
+        metadata received for an RPC, including protocol-required metadata.
+        QGrpcHttp2Channel reads it from the \c{QT_GRPC_MAXIMUM_METADATA_SIZE}
+        environment variable. Values below 4 KiB are raised to that minimum
+        (with a warning), and values above the transport's supported maximum
+        are clamped. If the environment variable is not set, the default value
+        is used. See \l{Environment variable fallbacks}.
+
+    \li Set rate limits and monitor traffic to prevent misuse.
+        Qt GRPC can be vulnerable to denial-of-service attacks and setting
+        limits and thorough testing can help with reducing the risk of
+        traffic overload.
+
+    \li Update your environment to fix security vulnerabilities.
+        System hardware should be updated to use the latest security features
+        and fixes.
+    \endlist
+
+    For more information about using Qt GPRC, visit the
+    \l{Qt GRPC Client Guide}.
+
+    For other security topics, visit the \l{Security in Qt} page.
+
+*/

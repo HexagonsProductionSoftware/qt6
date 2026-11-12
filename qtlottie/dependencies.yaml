@@ -1,0 +1,10 @@
+dependencies:
+  ../qtbase:
+    ref: 025bdad181de241e81bf853c8a2d7bf3d19261a9
+    required: true
+  ../qtdeclarative:
+    ref: 4332fbbb4c340463dc8cee36dda0c85d932122d8
+    required: true
+  ../qtquicktimeline:
+    ref: 645ba346fd8175aa0572d66c917862f8a7c4a966
+    required: true

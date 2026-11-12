@@ -1,0 +1,72 @@
+// Copyright (C) 2016 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+
+#ifndef MFAUDIODECODERCONTROL_H
+#define MFAUDIODECODERCONTROL_H
+
+//
+//  W A R N I N G
+//  -------------
+//
+// This file is not part of the Qt API.  It exists purely as an
+// implementation detail.  This header file may change from version to
+// version without notice, or even be removed.
+//
+// We mean it.
+//
+
+#include <decoder/mfdecodersourcereader_p.h>
+#include <sourceresolver_p.h>
+
+#include <QtMultimedia/private/qplatformaudiodecoder_p.h>
+#include <QtMultimedia/private/qwindowsresampler_p.h>
+
+QT_BEGIN_NAMESPACE
+
+class MFAudioDecoderControl : public QPlatformAudioDecoder
+{
+    Q_OBJECT
+public:
+    MFAudioDecoderControl(QAudioDecoder *parent);
+    ~MFAudioDecoderControl() override;
+
+    QUrl source() const override { return m_source; }
+    void setSource(const QUrl &fileName) override;
+
+    QIODevice* sourceDevice() const override { return m_device; }
+    void setSourceDevice(QIODevice *device) override;
+
+    void start() override;
+    void stop() override;
+
+    QAudioFormat audioFormat() const override { return m_outputFormat; }
+    void setAudioFormat(const QAudioFormat &format) override;
+
+    QAudioBuffer read() override;
+    bool bufferAvailable() const override { return m_audioBuffer.sampleCount() > 0; }
+
+    bool canReadQrc() const override { return true; }
+
+private Q_SLOTS:
+    void handleMediaSourceReady();
+    void handleMediaSourceError(long hr);
+    void handleNewSample(ComPtr<IMFSample>);
+    void handleSourceFinished();
+
+private:
+    void startReadingSource(const ComPtr<IMFMediaSource> &source);
+
+    std::unique_ptr<MFDecoderSourceReader> m_decoderSourceReader;
+    ComPtr<SourceResolver>  m_sourceResolver;
+    QWindowsResampler       m_resampler;
+    QUrl                    m_source;
+    QIODevice              *m_device = nullptr;
+    QAudioFormat            m_outputFormat;
+    QAudioBuffer            m_audioBuffer;
+    bool                    m_loadingSource = false;
+    bool                    m_deferredStart = false;
+};
+
+QT_END_NAMESPACE
+
+#endif//MFAUDIODECODERCONTROL_H

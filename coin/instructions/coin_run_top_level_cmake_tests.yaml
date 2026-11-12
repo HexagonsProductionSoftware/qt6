@@ -1,0 +1,34 @@
+type: Group
+instructions:
+  - !include "{{qt/qtbase}}/prepare_building_env.yaml"
+
+  - type: SetBuildDirectory
+    directory: "{{.SourceDir}}/run_cmake_tests_build"
+  - type: MakeDirectory
+    directory: "{{.BuildDir}}"
+  - type: ChangeDirectory
+    directory: "{{.BuildDir}}"
+
+  - type: EnvironmentVariable
+    variableName: COIN_CMAKE_ARGS
+    variableValue: "{{.Env.CMAKE_ARGS}} {{.Env.COMMON_CMAKE_ARGS}}"
+  - type: EnvironmentVariable
+    variableName: CONFIGURE_ENV_PREFIX
+    variableValue: "{{.Env.ENV_PREFIX}}"
+
+    # Re-fetch the qlitehtml repository in the Coin git mirror, otherwise the
+    # RunCMake.InitRepository test might fail trying to checkout a newer sha1 than what is
+    # available in the Coin git mirror.
+  - type: UpdateRepo
+    gitRemote: code.qt.io
+    repos: [playground/qlitehtml.git]
+
+  - type: ExecuteCommand
+    command: "{{.Env.CONFIGURE_ENV_PREFIX}} cmake {{.SourceDir}}/tests/manual/RunCMake"
+    executeCommandArgumentSplitingBehavior: SplitAfterVariableSubstitution
+    maxTimeInSeconds: 6000
+    maxTimeBetweenOutput: 1200
+    userMessageOnFailure: >
+      Failed to configure the RunCMake tests.
+
+  - !include "{{qt/qt5}}/cmake_run_ctest.yaml"

@@ -1,0 +1,22 @@
+{
+    "Id": "physx",
+    "Name": "NVIDIA PhysX SDK",
+    "QDocModule": "qtquick3dphysics",
+    "Description": "The NVIDIA PhysX SDK is a scalable multi-platform physics solution supporting a wide range of devices",
+    "QtUsage": "Used as a physical simulation backend in Qt Quick 3D Physics",
+    "SecurityCritical": true,
+
+    "Homepage": "https://github.com/NVIDIAGameWorks/PhysX/",
+    "Version": "4.1.2.29882248",
+    "DownloadLocation": "https://github.com/NVIDIAGameWorks/PhysX/commit/c3d5537bdebd6f5cd82fcaf87474b838fe6fd5fa",
+    "PURL": "pkg:github/NVIDIAGameWorks/PhysX@c3d5537bdebd6f5cd82fcaf87474b838fe6fd5fa",
+
+    "License": "BSD 3-Clause \"New\" or \"Revised\" License",
+    "LicenseId": "BSD-3-Clause",
+    "LicenseFile": "LICENSE.md",
+    "Copyright": [
+        "Copyright (c) 2008-2021 NVIDIA Corporation",
+        "Copyright (c) 2004-2008 AGEIA Technologies, Inc.",
+        "Copyright (c) 2001-2004 NovodeX AG"
+    ]
+}

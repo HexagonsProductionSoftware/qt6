@@ -1,0 +1,28 @@
+Version: 2
+Include: [
+  quick-bridges.yaml: [
+     "macos-quick-bridges",
+     "linux-quick-bridges",
+     "windows-quick-bridges"
+  ]
+]
+Configurations:
+-
+    Id: 'windows-quick-bridges-swift'
+    Template: 'qtci-windows-11_24H2-x86_64-73'
+    Compiler: 'MSVC2022'
+    Platform dependency: 'windows-quick-bridges'
+    Features: ['Packaging', 'Sccache', 'UseConfigure', 'DisableTests', 'RunAsPlatformDependency', 'QtBridgesSwift']
+-
+    Id: 'macos-quick-bridges-swift'
+    Template: 'qtci-macos-15-arm-105'
+    Compiler: 'Clang'
+    Platform dependency: 'macos-quick-bridges'
+    Features: ['Packaging', 'Sccache', 'UseConfigure', 'DisableTests', 'RunAsPlatformDependency', 'QtBridgesSwift']
+
+-
+    Id: 'linux-quick-bridges-swift'
+    Template: 'qtci-linux-Ubuntu-24.04-x86_64-54'
+    Compiler: 'GCC'
+    Platform dependency: 'linux-quick-bridges'
+    Features: ['Packaging', 'Sccache', 'UseConfigure', 'DisableTests', 'RunAsPlatformDependency', 'QtBridgesSwift']
