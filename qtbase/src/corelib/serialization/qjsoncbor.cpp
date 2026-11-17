@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 // Qt-Security score:critical reason:data-parser
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105924-qtbase-6.8.diff
+
 #include "qcborvalue.h"
 #include "qcborvalue_p.h"
 
@@ -175,15 +177,21 @@ static QJsonValue convertExtendedTypeToJson(QCborContainerPrivate *d)
     qint64 tag = d->elements.at(0).value;
 
     switch (tag) {
-    case qint64(QCborKnownTags::Url):
+    case qint64(QCborKnownTags::Url): {
 #ifdef QT_BOOTSTRAPPED
         break;
 #else
         // use the fully-encoded URL form
-        if (d->elements.at(1).type == QCborValue::String)
-            return QUrl::fromEncoded(d->byteData(1)->asByteArrayView()).toString(QUrl::FullyEncoded);
+        Element e = d->elements.at(1);
+        const ByteData *bd = d->byteData(e);
+        if (e.type == QCborValue::String) {
+            if (!bd)
+                return QString();
+            return QUrl::fromEncoded(bd->asByteArrayView()).toString(QUrl::FullyEncoded);
+        }
         Q_FALLTHROUGH();
 #endif
+    }
 
     case qint64(QCborKnownTags::DateTimeString):
     case qint64(QCborKnownTags::ExpectedBase64url):

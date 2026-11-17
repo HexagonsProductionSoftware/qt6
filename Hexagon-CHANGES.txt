@@ -70,3 +70,6 @@
    - qtbase/tests/auto/network/access/qhttp2connection/tst_qhttp2connection.cpp
 - qtactiveqt\tests\auto\conversion\tst_conversion.cpp: 
    Fixed compile error: wrong path to include qaxobject.h
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-105924-qtbase-6.8.diff (#35)
+   - qtbase/src/corelib/serialization/qjsoncbor.cpp
+   - qtbase/tests/auto/corelib/serialization/qcborvalue_json/tst_qcborvalue_json.cpp
