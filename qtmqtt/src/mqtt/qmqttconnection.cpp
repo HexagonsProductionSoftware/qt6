@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 // Qt-Security score:critical reason:network-protocol
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-107457-qtmqtt-6.8.diff
+
 #include "qmqttconnection_p.h"
 #include "qmqttconnectionproperties_p.h"
 #include "qmqttcontrolpacket_p.h"
@@ -367,7 +369,9 @@ qint32 QMqttConnection::sendControlPublish(const QMqttTopicName &topic,
 
         const quint16 topicAlias = publishProperties.topicAlias();
         if (topicAlias > 0) { // User specified topic Alias
-            if (topicAlias > m_clientPrivate->m_serverConnectionProperties.maximumTopicAlias()) {
+            // m_publishAliases is sized from the maximum the server declared in CONNACK,
+            // so bounds-check against the list itself rather than against a property value.
+            if (topicAlias > m_publishAliases.size()) {
                 qCDebug(lcMqttConnection) << "TopicAlias publish: overflow.";
                 return -1;
             }
@@ -1451,8 +1455,16 @@ void QMqttConnection::finalize_connack()
     // MQTT 5.0 has variable part != 2 in the header
     if (m_clientPrivate->m_protocolVersion == QMqttClient::MQTT_5_0) {
         readConnackProperties(m_clientPrivate->m_serverConnectionProperties);
-        m_receiveAliases.resize(m_clientPrivate->m_serverConnectionProperties.maximumTopicAlias());
-        m_publishAliases.resize(m_clientPrivate->m_connectionProperties.maximumTopicAlias());
+        // MQTT 5.0, 3.1.2.11.5 and 3.2.2.3.8: the two Topic Alias Maximum values are
+        // directional. The value this client sent in CONNECT bounds the aliases the
+        // server may use towards us (m_receiveAliases); the value the server sent in
+        // CONNACK bounds the aliases we may use towards it (m_publishAliases).
+        // Mappings live only for the lifetime of a network connection, so discard any
+        // left over from a previous one instead of resizing in place.
+        m_receiveAliases.clear();
+        m_receiveAliases.resize(m_clientPrivate->m_connectionProperties.maximumTopicAlias());
+        m_publishAliases.clear();
+        m_publishAliases.resize(m_clientPrivate->m_serverConnectionProperties.maximumTopicAlias());
 
         // 3.2.2.2
         switch (QMqtt::ReasonCode(connectResultValue)) {
@@ -1636,7 +1648,9 @@ void QMqttConnection::finalize_publish()
 
     if (publishProperties.availableProperties() & QMqttPublishProperties::TopicAlias) {
         const quint16 topicAlias = publishProperties.topicAlias();
-        if (topicAlias == 0 || topicAlias > m_clientPrivate->m_connectionProperties.maximumTopicAlias()) {
+        // m_receiveAliases is sized from the maximum this client declared in CONNECT,
+        // so bounds-check against the list itself rather than against a property value.
+        if (topicAlias == 0 || topicAlias > m_receiveAliases.size()) {
             qCDebug(lcMqttConnection) << "TopicAlias receive: overflow.";
             closeConnection(QMqttClient::ProtocolViolation);
             return;
