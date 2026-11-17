@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 // Qt-Security score:critical reason:data-parser
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-107157-qtbase-6.8.diff
+
 #ifndef QCBORVALUE_H
 #define QCBORVALUE_H
 
@@ -238,9 +240,9 @@ public:
     static QCborValue fromCbor(QCborStreamReader &reader);
     static QCborValue fromCbor(const QByteArray &ba, QCborParserError *error = nullptr);
     static QCborValue fromCbor(const char *data, qsizetype len, QCborParserError *error = nullptr)
-    { return fromCbor(QByteArray(data, int(len)), error); }
+    { return fromCbor(QByteArray(data, len), error); }
     static QCborValue fromCbor(const quint8 *data, qsizetype len, QCborParserError *error = nullptr)
-    { return fromCbor(QByteArray(reinterpret_cast<const char *>(data), int(len)), error); }
+    { return fromCbor(QByteArray(reinterpret_cast<const char *>(data), len), error); }
 #endif // QT_CONFIG(cborstreamreader)
 #if QT_CONFIG(cborstreamwriter)
     QByteArray toCbor(EncodingOptions opt = NoTransformation) const;

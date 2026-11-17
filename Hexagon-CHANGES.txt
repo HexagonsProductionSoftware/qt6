@@ -78,6 +78,8 @@
    - qtbase/tests/auto/network/kernel/qauthenticator/tst_qauthenticator.cpp
 - Applied https://download.qt.io/archive/qt/6.8/CVE-2026-105946-qtbase-6.8-0002.diff (#37)
    - qtbase/src/network/kernel/qauthenticator.cpp
-- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-105946-qtbase-6.8-0003.diff
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-105946-qtbase-6.8-0003.diff (#38)
    - qtbase/src/network/kernel/qauthenticator.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-107157-qtbase-6.8.diff (#39)
+   - qtbase/src/corelib/serialization/qcborvalue.h
    
