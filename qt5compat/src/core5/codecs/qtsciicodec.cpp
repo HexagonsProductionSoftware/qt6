@@ -6,6 +6,8 @@
 // and is included in Qt with the author's permission, and the grateful
 // thanks of the Qt team.
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-107472-qt5compat-6.8.diff
+
 #include "qtsciicodec_p.h"
 #include "qlist.h"
 
@@ -50,9 +52,9 @@ QByteArray QTsciiCodec::convertFromUnicode(const QChar *uc, int len, ConverterSt
         if (ch.row() == 0x00 && ch.cell() < 0x80) {
             // ASCII
             j = ch.cell();
-        } else if ((j = qt_UnicodeToTSCII(uc[i].unicode(),
-                                          uc[i + 1].unicode(),
-                                          uc[i + 2].unicode()))) {
+        } else if ((i < len - 2) && (j = qt_UnicodeToTSCII(uc[i].unicode(),
+                                                           uc[i + 1].unicode(),
+                                                           uc[i + 2].unicode()))) {
             // We have to check the combined chars first!
             i += 2;
         } else if ((j = qt_UnicodeToTSCII(uc[i].unicode(),

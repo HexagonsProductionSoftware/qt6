@@ -84,3 +84,6 @@
    - qtbase/src/corelib/serialization/qcborvalue.h
 - Applied https://download.qt.io/archive/qt/6.8/CVE-2026-107457-qtmqtt-6.8.diff (#40)
    - qtmqtt/src/mqtt/qmqttconnection.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-107472-qt5compat-6.8.diff (#41)
+   - qt5compat/src/core5/codecs/qtsciicodec.cpp
+   - qt5compat/tests/auto/core5/codecs/qtextcodec/tst_qtextcodec.cpp
