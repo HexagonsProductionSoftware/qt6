@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 // Qt-Security score:critical reason:data-parser
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105946-qtbase-6.8-0001.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105946-qtbase-6.8-0002.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105946-qtbase-6.8-0003.diff
+
 #include <qauthenticator.h>
 #include <qauthenticator_p.h>
 #include <qdebug.h>
@@ -671,6 +675,8 @@ QAuthenticatorPrivate::parseDigestAuthenticationChallenge(QByteArrayView challen
         const char *start = d;
         while (d < end && *d != '=')
             ++d;
+        if (d >= end)
+            break;
         QByteArrayView key = QByteArrayView(start, d - start);
         ++d;
         if (d >= end)
@@ -701,7 +707,8 @@ QAuthenticatorPrivate::parseDigestAuthenticationChallenge(QByteArrayView challen
         }
         while (d < end && *d != ',')
             ++d;
-        ++d;
+        if (d < end)
+            ++d;
         options[key.toByteArray()] = std::move(value);
     }
 
@@ -987,6 +994,8 @@ QByteArray QAuthenticatorPrivate::digestMd5Response(QByteArrayView challenge, QB
 const int blockSize = 64; //As per RFC2104 Block-size is 512 bits
 const quint8 respversion = 1;
 const quint8 hirespversion = 1;
+// FILETIME: two 32-bit values = 8 bytes (MS-DTYP section 2.3.3)
+static constexpr quint16 NtlmFileTimeSize = 8;
 
 /* usage:
    // fill up ctx with what we know.
@@ -1313,24 +1322,29 @@ static QByteArray clientChallenge(const QAuthenticatorPrivate *ctx)
 static QByteArray qExtractServerTime(const QByteArray& targetInfoBuff)
 {
     QByteArray timeArray;
-    QDataStream ds(targetInfoBuff);
-    ds.setByteOrder(QDataStream::LittleEndian);
-
+    const char *ptr = targetInfoBuff.constBegin();
+    const char *end = targetInfoBuff.constEnd();
     quint16 avId;
     quint16 avLen;
 
-    ds >> avId;
-    ds >> avLen;
-    while(avId != 0) {
+    while (end - ptr >= 4) {
+        avId = qFromLittleEndian<quint16>(ptr + 0);
+        avLen = qFromLittleEndian<quint16>(ptr + 2);
+        ptr += 4;
+
         if (avId == AVTIMESTAMP) {
-            timeArray.resize(avLen);
-            //avLen size of QByteArray is allocated
-            ds.readRawData(timeArray.data(), avLen);
+            if (avLen != NtlmFileTimeSize)
+                break;
+            if (end - ptr < NtlmFileTimeSize)
+                break;
+
+            timeArray.assign(ptr, ptr + NtlmFileTimeSize);
             break;
         }
-        ds.skipRawData(avLen);
-        ds >> avId;
-        ds >> avLen;
+
+        if (avLen > end - ptr)
+            break;
+        ptr += avLen;
     }
     return timeArray;
 }
@@ -1446,14 +1460,20 @@ static bool qNtlmDecodePhase2(const QByteArray& data, QNtlmPhase2Block& ch)
     ds >> ch.targetInfo;
 
     if (ch.targetName.len > 0) {
-        if (qsizetype(ch.targetName.len + ch.targetName.offset) > data.size())
+        qsizetype total;
+        if (qAddOverflow(qsizetype(ch.targetName.offset), qsizetype(ch.targetName.len), &total))
+            return false;
+        if (total > data.size())
             return false;
 
         ch.targetNameStr = qStringFromUcs2Le(data.mid(ch.targetName.offset, ch.targetName.len));
     }
 
     if (ch.targetInfo.len > 0) {
-        if (ch.targetInfo.len + ch.targetInfo.offset > (unsigned)data.size())
+        qsizetype total;
+        if (qAddOverflow(qsizetype(ch.targetInfo.offset), qsizetype(ch.targetInfo.len), &total))
+            return false;
+        if (total > data.size())
             return false;
 
         ch.targetInfoBuff = data.mid(ch.targetInfo.offset, ch.targetInfo.len);
