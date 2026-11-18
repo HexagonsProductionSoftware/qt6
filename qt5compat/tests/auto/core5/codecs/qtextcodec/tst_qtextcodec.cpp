@@ -4,6 +4,7 @@
 
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-107472-qt5compat-6.8.diff
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-107590-qt5compat-6.8.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-103645-qt5compat-6.8.diff
 
 #include <QtTest/QtTest>
 
@@ -99,6 +100,8 @@ private slots:
     void tsciiEncoderDoesNotReadPastTheEnd();
 
     void iconvEncoderPendingSurrogateDoesNotOverflow();
+
+    void icuNoIntOverflowInFromUnicode();
 };
 
 void tst_QTextCodec::toUnicode_data()
@@ -2923,6 +2926,35 @@ void tst_QTextCodec::iconvEncoderPendingSurrogateDoesNotOverflow()
 
     QCOMPARE(continued, expected);
     QCOMPARE(state.remainingChars, qsizetype(0));
+}
+
+/*
+    The ICU codec uses UCNV_GET_MAX_BYTES_FOR_STRING() macro that can
+    overflow on a long input string. As a result, we'll pass a negative
+    length to the c-tor of QByteArray, which will effectively lead to using
+    a global static empty instance. The code that then tries to populate
+    this buffer with the actual encoding results, will get stuck in an infinite
+    loop without a fix.
+*/
+void tst_QTextCodec::icuNoIntOverflowInFromUnicode()
+{
+    // Only ICU supports this codec
+    QTextCodec *codec = QTextCodec::codecForName("ISO-2022-KR"); // maxCharSize == 8
+    if (!codec)
+        QSKIP("This test requires ICU");
+
+    QT_TRY {
+        // Enough to trigger int overflow when calculating max buffer size
+        constexpr qsizetype InputLength = 300 * 1024 * 1024;
+        const QString input(InputLength, u'x');
+
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression("Unable to allocate an output buffer.+"));
+        const QByteArray result = codec->fromUnicode(input);
+        QVERIFY(result.isNull());
+    } QT_CATCH(const std::bad_alloc &) {
+        QSKIP("The test could not allocate enough memory");
+    }
 }
 
 QT_END_NAMESPACE

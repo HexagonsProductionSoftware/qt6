@@ -160,3 +160,7 @@
       - qtwebsockets/tests/auto/websockets/qwebsocketserver/tst_qwebsocketserver.cpp
    - CVE-2026-114369-qtwebsockets-6.8-0003.diff
       /!\ This patch not applied due to context uncertainty.
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-103645-qt5compat-6.8.diff (#53)
+   - qt5compat/src/core5/codecs/qicucodec.cpp
+   - qt5compat/tests/auto/core5/codecs/qtextcodec/tst_qtextcodec.cpp
+   
