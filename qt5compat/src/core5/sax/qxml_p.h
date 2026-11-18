@@ -5,6 +5,12 @@
 
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-100140-qt5compat-6.8.zip / CVE-2026-100140-qt5compat-6.8-0002.diff
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-100140-qt5compat-6.8.zip / CVE-2026-100140-qt5compat-6.8-0003.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0001.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0002.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0003.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0004.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0005.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0006.diff
 
 #ifndef QXML_P_H
 #define QXML_P_H
@@ -149,6 +155,8 @@ private:
     };
     friend class QTypeInfo<ParseState>;
     QStack<ParseState> *parseStack;
+    bool resumeSuspendedCall();
+    int tryUnwindParseStack(ParseState::ParseFunction func);
 
     // used in parseProlog()
     bool xmldecl_possible;
@@ -222,6 +230,32 @@ private:
     bool entityExist(const QString&) const;
 
     bool parseBeginOrContinue(int state, bool incremental);
+
+    enum class FrameType
+    {
+        Element,
+        Content,
+        ChoiceSeq,
+    };
+
+    enum class FrameParseResult
+    {
+        Done,
+        Failed,
+        EnterElement,
+        EnterContent,
+        EnterChoiceSeq,
+    };
+
+    struct FrameState
+    {
+        FrameType frame;
+        int state;
+    };
+    bool parseNestedFrames(FrameType outermost);    
+    FrameParseResult parseElementFrame(int &state);
+    FrameParseResult parseContentFrame(int &state);
+    FrameParseResult parseChoiceSeqFrame(int &state);
 
     bool parseProlog();
     bool parseElement();

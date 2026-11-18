@@ -120,4 +120,25 @@
    - qtcoap/tests/auto/qcoapinternalreply/tst_qcoapinternalreply.cpp
 - Applied https://download.qt.io/archive/qt/6.8/CVE-2026-107479-qt5compat-6.8.diff (#48)
    - qt5compat/src/core5/codecs/qtextcodec.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip (#49)
+   - CVE-2026-97845-qt5compat-6.8-0001.diff
+      - qt5compat/src/core5/sax/qxml.cpp
+      - qt5compat/src/core5/sax/qxml_p.h
+   - CVE-2026-97845-qt5compat-6.8-0002.diff
+      - qt5compat/src/core5/sax/qxml.cpp
+      - qt5compat/src/core5/sax/qxml_p.h
+   - CVE-2026-97845-qt5compat-6.8-0003.diff
+      - qt5compat/src/core5/sax/qxml.cpp
+      - qt5compat/src/core5/sax/qxml_p.h
+   - CVE-2026-97845-qt5compat-6.8-0004.diff
+      - qt5compat/src/core5/sax/qxml.cpp
+      - qt5compat/src/core5/sax/qxml_p.h
+   - CVE-2026-97845-qt5compat-6.8-0005.diff
+      - qt5compat/src/core5/sax/qxml.cpp
+      - qt5compat/src/core5/sax/qxml_p.h
+      - qt5compat/tests/auto/core5/sax/qxmlsimplereader/tst_qxmlsimplereader.cpp
+   - CVE-2026-97845-qt5compat-6.8-0006.diff
+      - qt5compat/src/core5/sax/qxml.cpp
+      - qt5compat/src/core5/sax/qxml_p.h
+      - qt5compat/tests/auto/core5/sax/qxmlsimplereader/tst_qxmlsimplereader.cpp
    
