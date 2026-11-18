@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 // Qt-Security score:critical reason:network-protocol
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-103653-qtcoap-6.8-0001.diff
+
 #include "qcoapprotocol_p.h"
 #include "qcoapinternalrequest_p.h"
 #include "qcoapinternalreply_p.h"
@@ -322,6 +324,13 @@ void QCoapProtocolPrivate::onFrameReceived(const QByteArray &data, const QHostAd
 {
     Q_Q(const QCoapProtocol);
     Q_ASSERT(QThread::currentThread() == q->thread());
+
+    if (!reply) {
+        qCDebug(lcCoapProtocol).nospace() << "QtCoap: Discarding malformed frame from "
+                                          << sender << " (" << data.size()
+                                          << " bytes): not a valid CoAP message";
+        return;
+    }
 
     QSharedPointer<QCoapInternalReply> reply(decode(data, sender));
     const QCoapMessage *messageReceived = reply->message();
@@ -691,6 +700,9 @@ QCoapInternalReply *QCoapProtocolPrivate::decode(const QByteArray &data, const Q
 {
     Q_Q(QCoapProtocol);
     QCoapInternalReply *reply = QCoapInternalReply::createFromFrame(data, q);
+    if (!reply)
+        return nullptr;
+
     reply->setSenderAddress(sender);
 
     return reply;

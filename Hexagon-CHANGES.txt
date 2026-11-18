@@ -111,4 +111,10 @@
 - Applied https://download.qt.io/archive/qt/6.8/CVE-2026-114366-qtwebsockets-6.8-0001.diff (#45)
    - qtwebsockets/src/websockets/qwebsocket_p.cpp
    /!\ File qtwebsockets/tests/auto/websockets/qwebsocket/tst_qwebsocket.cpp not patched due to too large differences: all contexts couldn't be identified.
-   
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-103653-qtcoap-6.8-0001.diff (#46)
+   - qtcoap/src/coap/qcoapinternalreply.cpp
+   - qtcoap/src/coap/qcoapprotocol.cpp
+   - qtcoap/tests/auto/qcoapinternalreply/tst_qcoapinternalreply.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-103653-qtcoap-6.8-0002.diff (#47)
+   - qtcoap/src/coap/qcoapinternalreply.cpp
+   - qtcoap/tests/auto/qcoapinternalreply/tst_qcoapinternalreply.cpp

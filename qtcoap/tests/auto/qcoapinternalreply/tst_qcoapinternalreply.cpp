@@ -2,6 +2,9 @@
 // Copyright (C) 2018 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-103653-qtcoap-6.8-0001.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-103653-qtcoap-6.8-0002.diff
+
 #include <QtTest>
 #include <QCoreApplication>
 
@@ -15,6 +18,8 @@ class tst_QCoapInternalReply : public QObject
 private Q_SLOTS:
     void parseReplyPdu_data();
     void parseReplyPdu();
+    void parseInvalidReplyPdu_data();
+    void parseInvalidReplyPdu();
     void updateReply_data();
     void updateReply();
 };
@@ -136,6 +141,43 @@ void tst_QCoapInternalReply::parseReplyPdu()
     }
     QCOMPARE(reply->message()->payload(), payload.toUtf8());
 }
+
+void tst_QCoapInternalReply::parseInvalidReplyPdu_data()
+{
+    QTest::addColumn<QByteArray>("frame");
+
+    // A CoAP message is at least 4 bytes long (the fixed header). Frames shorter
+    // than that must be rejected before the header is dereferenced;
+    // createFromFrame() signals rejection by returning nullptr.
+    QTest::newRow("empty")       << QByteArray();
+    QTest::newRow("one_byte")    << QByteArray::fromHex("50");
+    QTest::newRow("two_bytes")   << QByteArray::fromHex("5045");
+    QTest::newRow("three_bytes") << QByteArray::fromHex("5045fb");
+
+    // Option-parser cases: each frame has a valid 4-byte header (no token)
+    // followed by a single option byte whose encoding demands bytes that are
+    // not present. createFromFrame() must reject the frame rather than read
+    // past the buffer or deliver a silently truncated option.
+
+    // 0x09: option value length 9, but no value bytes follow it.
+    QTest::newRow("option_value_overruns_buffer")   << QByteArray::fromHex("50450001" "09");
+    // 0xd0: delta nibble 13 promises one extended delta byte that is missing.
+    QTest::newRow("missing_option_delta_ext_byte")  << QByteArray::fromHex("50450001" "d0");
+    // 0x0d: length nibble 13 promises one extended length byte that is missing.
+    QTest::newRow("missing_option_length_ext_byte") << QByteArray::fromHex("50450001" "0d");
+    // 0x0d + 0xff: extended length yields optionLength 268, far past the buffer.
+    QTest::newRow("extended_option_length_overruns") << QByteArray::fromHex("50450001" "0d" "ff");
+}
+
+void tst_QCoapInternalReply::parseInvalidReplyPdu()
+{
+    QFETCH(QByteArray, frame);
+
+    QScopedPointer<QCoapInternalReply> reply(QCoapInternalReply::createFromFrame(frame));
+    QVERIFY2(reply.isNull(),
+             "createFromFrame() must reject a malformed frame by returning nullptr");
+}
+
 
 void tst_QCoapInternalReply::updateReply_data()
 {
