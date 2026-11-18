@@ -3,6 +3,9 @@
 // Qt-Security score:critical reason:data-parser
 // ### TODO: inline this file into qxml.cpp
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-100140-qt5compat-6.8.zip / CVE-2026-100140-qt5compat-6.8-0002.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-100140-qt5compat-6.8.zip / CVE-2026-100140-qt5compat-6.8-0003.diff
+
 #ifndef QXML_P_H
 #define QXML_P_H
 
@@ -79,7 +82,7 @@ private:
         QChar next() { return value.at(index++); }
         QString name;
         QString value;
-        int index;
+        qsizetype index;
     };
     friend class QTypeInfo<XmlRef>;
     QStack<XmlRef> xmlRefStack;
@@ -168,27 +171,25 @@ private:
     QXmlInputSource *inputSource;
 
     QChar c; // the character at reading position
-    int   lineNr; // number of line
-    int   columnNr; // position in line
+    // The public API is int-based, range-checked in reportedPosition().
+    qsizetype   lineNr; // number of line
+    qsizetype   columnNr; // position in line
 
     QChar   nameArray[256]; // only used for names
     QString nameValue; // only used for names
     int     nameArrayPos;
-    int     nameValueLen;
     QChar   refArray[256]; // only used for references
     QString refValue; // only used for references
     int     refArrayPos;
-    int     refValueLen;
     QChar   stringArray[256]; // used for any other strings that are parsed
     QString stringValue; // used for any other strings that are parsed
     int     stringArrayPos;
-    int     stringValueLen;
     QString emptyStr;
 
-    QHash<QString, int> literalEntitySizes;
-    // The entity at (QMap<QString,) referenced the entities at (QMap<QString,) (int>) times.
-    QHash<QString, QHash<QString, int> > referencesToOtherEntities;
-    QHash<QString, int> expandedSizes;
+    QHash<QString, qsizetype> literalEntitySizes;
+    // The entity at (QMap<QString,) referenced the entities at (QMap<QString,) (qsizetype>) times.
+    QHash<QString, QHash<QString, qsizetype> > referencesToOtherEntities;
+    QHash<QString, qsizetype> expandedSizes;
     // The limit to the amount of times the DTD parsing functions can be called
     // for the DTD currently being parsed.
     static const int dtdRecursionLimit = 2;

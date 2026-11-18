@@ -87,6 +87,20 @@
 - Applied https://download.qt.io/archive/qt/6.8/CVE-2026-107472-qt5compat-6.8.diff (#41)
    - qt5compat/src/core5/codecs/qtsciicodec.cpp
    - qt5compat/tests/auto/core5/codecs/qtextcodec/tst_qtextcodec.cpp
-- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-107590-qt5compat-6.8.diff
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-107590-qt5compat-6.8.diff (#42)
    - qt5compat/src/core5/codecs/qiconvcodec.cpp
    - qt5compat/tests/auto/core5/codecs/qtextcodec/tst_qtextcodec.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-100140-qt5compat-6.8.zip (#43)
+   /!\ Patches in the __MACOSX subdirectory have been ignored.
+   - CVE-2026-100140-qt5compat-6.8-0001.diff
+      - qt5compat/src/core5/sax/qxml.cpp
+   - CVE-2026-100140-qt5compat-6.8-0002.diff
+      - qt5compat/src/core5/sax/qxml.cpp
+      - qt5compat/src/core5/sax/qxml_p.h
+      - qt5compat/tests/auto/core5/sax/qxmlsimplereader/tst_qxmlsimplereader.cpp
+   - CVE-2026-100140-qt5compat-6.8-0003.diff
+      - qt5compat/src/core5/sax/qxml.cpp
+      - qt5compat/src/core5/sax/qxml_p.h
+   - CVE-2026-100140-qt5compat-6.8-0004.diff
+      - qt5compat/src/core5/sax/qxml.cpp
+   
