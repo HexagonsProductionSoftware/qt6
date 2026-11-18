@@ -12,6 +12,9 @@
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0004.diff
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0005.diff
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0006.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105925-qt5compat-6.8.zip / CVE-2026-105925-qt5compat-6.8-0002.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105925-qt5compat-6.8.zip / CVE-2026-105925-qt5compat-6.8-0003.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105925-qt5compat-6.8.zip / CVE-2026-105925-qt5compat-6.8-0004.diff
 
 #include "qglobal.h"
 
@@ -2913,6 +2916,20 @@ QXmlReader::~QXmlReader()
 
     Note that this class is now deprecated, please use QXmlStreamReader or
     QDomDocument for reading XML files.
+
+    \section1 Entity expansion limit
+
+    QXmlSimpleReader enforces a limit of \c {4096} characters when expanding
+    general and parameter entities. If any entity expands past this limit, the
+    document is considered to be malformed, and an error is raised. This limit
+    can be adjusted using the
+    \e {http://qt-project.org/xml/properties/entity-expansion-limit} property.
+
+    See \l {QXmlSimpleReader::}{setProperty()} for an example of how to apply
+    a new limit.
+
+    \note This limit is only applicable to the internal entities. Use
+    QXmlEntityResolver to handle external entities.
 */
 
 static inline bool is_S(QChar ch)
@@ -3087,27 +3104,81 @@ bool QXmlSimpleReader::hasFeature(const QString& name) const
     }
 }
 
-/*! \reimp
+constexpr const char *SaxEntityExpansionLimitProperty =
+        "http://qt-project.org/xml/properties/entity-expansion-limit";
+
+/*!
+    \reimp
+
+    Returns the value of the property \a name and sets \a ok to \c {true} if the
+    property exists. Otherwise sets \a ok to \c {false} and returns \c nullptr.
+
+    The only supported property is
+    \e {http://qt-project.org/xml/properties/entity-expansion-limit}. The
+    returned value is not a pointer to the limit, but the limit itself, stored
+    in the \c {void *}. Convert it back to an integer using \l qintptr, and
+    never dereference it.
+
+    \code
+    QXmlSimpleReader reader;
+    bool ok = false;
+    void *value =
+        reader.property("http://qt-project.org/xml/properties/entity-expansion-limit", &ok);
+    if (ok) {
+        const qintptr limit = reinterpret_cast<qintptr>(value);
+        qDebug() << "The entity expansion limit is" << limit;
+    }
+    \endcode
 */
-void* QXmlSimpleReader::property(const QString&, bool *ok) const
+void* QXmlSimpleReader::property(const QString &name, bool *ok) const
 {
+    if (name == QLatin1String(SaxEntityExpansionLimitProperty)) {
+        if (ok)
+            *ok = true;
+        Q_D(const QXmlSimpleReader);
+        return reinterpret_cast<void *>(qintptr(d->entityCharacterLimit));
+    }
+
     if (ok)
         *ok = false;
     return nullptr;
 }
 
-/*! \reimp
+/*!
+    \reimp
+
+    Sets the property \a name to \a value.
+
+    The only supported property is
+    \e {http://qt-project.org/xml/properties/entity-expansion-limit}. The
+    input value is not a pointer to the limit, but the limit itself, converted
+    to \c {void *} via \l qintptr. Values that are not positive or do not fit
+    into an \c int are ignored.
+
+    \code
+    QXmlSimpleReader reader;
+    const qintptr limit = 1024;
+    reader.setProperty("http://qt-project.org/xml/properties/entity-expansion-limit",
+                       reinterpret_cast<void *>(limit));
+    \endcode
 */
-void QXmlSimpleReader::setProperty(const QString&, void*)
+void QXmlSimpleReader::setProperty(const QString &name, void *value)
 {
+    if (name == QLatin1String(SaxEntityExpansionLimitProperty)) {
+        const qintptr limit = reinterpret_cast<qintptr>(value);
+        if (limit > 0 && limit <= INT_MAX) {
+            Q_D(QXmlSimpleReader);
+            d->entityCharacterLimit = int(limit);
+        }
+    }
 }
 
 /*!
     \reimp
 */
-bool QXmlSimpleReader::hasProperty(const QString&) const
+bool QXmlSimpleReader::hasProperty(const QString &name) const
 {
-    return false;
+    return name == QLatin1String(SaxEntityExpansionLimitProperty);
 }
 
 /*!
@@ -3264,9 +3335,7 @@ bool QXmlSimpleReader::parse(const QXmlInputSource *input, bool incremental)
 {
     Q_D(QXmlSimpleReader);
 
-    d->literalEntitySizes.clear();
-    d->referencesToOtherEntities.clear();
-    d->expandedSizes.clear();
+    d->includedParameterEntitySize = 0;
 
     if (incremental) {
         d->initIncrementalParsing();
@@ -5291,12 +5360,14 @@ bool QXmlSimpleReaderPrivate::parsePEReference()
             case Name:
                 {
                     bool skipIt = true;
+                    ExpansionCheck check = ExpansionCheck::None;
                     QString xmlRefString;
 
                     QMap<QString,QString>::Iterator it;
                     it = parameterEntities.find(ref());
                     if (it != parameterEntities.end()) {
                         skipIt = false;
+                        check = ExpansionCheck::ParameterEntity;
                         xmlRefString = *it;
                     } else if (entityRes) {
                         QMap<QString,QXmlSimpleReaderPrivate::ExternParameterEntity>::Iterator it2;
@@ -5335,12 +5406,33 @@ bool QXmlSimpleReaderPrivate::parsePEReference()
                     } else {
                         if (parsePEReference_context == InEntityValue) {
                             // Included in literal
+                            // Check that the overall size does not exceed the
+                            // expansion limit right here, instead of doing the
+                            // full expansion. Note that all the nested
+                            // parameter entities are already expanded here, so
+                            // xmlRefString contains only literals or general
+                            // entities.
+                            includedParameterEntitySize += xmlRefString.size();
+                            if (includedParameterEntitySize > entityCharacterLimit) {
+                                reportParseError(QString::fromLatin1(
+                                        "Expanding the XML entity \"%%1\" makes the enclosing "
+                                        "entity value exceed the limit of %2 characters.")
+                                        .arg(ref(), QString::number(entityCharacterLimit)));
+                                return false;
+                            }
                             if (!insertXmlRef(xmlRefString, ref(), true))
                                 return false;
                         } else if (parsePEReference_context == InDTD) {
                             // Included as PE
-                            if (!insertXmlRef(QLatin1Char(' ') + xmlRefString + QLatin1Char(' '), ref(), false))
+                            // The replacement text is parsed again, and can
+                            // expand further parameter entities and general
+                            // entities, so count it like a general entity.
+                            // The external entities are not counted, same as
+                            // for general entities.
+                            if (!insertXmlRef(QLatin1Char(' ') + xmlRefString + QLatin1Char(' '),
+                                              ref(), false, check)) {
                                 return false;
+                            }
                         }
                     }
                 }
@@ -6368,66 +6460,60 @@ QXmlSimpleReaderPrivate::FrameParseResult QXmlSimpleReaderPrivate::parseChoiceSe
     return FrameParseResult::Failed;
 }
 
-bool QXmlSimpleReaderPrivate::isExpandedEntityValueTooLarge(QString *errorMessage)
+/*
+    Called before the value \a value of the entity \a name is inserted for
+    parsing. The entity is either an internal general entity, or an internal
+    parameter entity included in the DTD. Accumulates the expanded size of the
+    outermost such entity that is currently being expanded. Returns \c true and
+    sets \a errorMessage if that size exceeds entityCharacterLimit.
+
+    The size is counted like the expanded value of the outermost entity: every
+    reference to such an entity is replaced by the value of that entity. All
+    other references (unknown entities, standard entities, and character
+    references) are counted with their literal size.
+
+    Since the size is accumulated while the entities are being expanded, it
+    does not depend on the order in which the entities were declared, and it
+    covers every place where the entities are expanded (content, attribute
+    values, the DTD itself, and default attribute values in the DTD).
+*/
+bool QXmlSimpleReaderPrivate::addToExpandedEntitySize(const QString &name, const QString &value,
+                                                      ExpansionCheck entityType,
+                                                      QString *errorMessage)
 {
-    QString entityNameBuffer;
+    // Find the closest entity that is being expanded and counts towards the
+    // limit. The entity that contains this reference is still on the stack,
+    // even if the reference is at the very end of its value, because the stack
+    // is only popped when the next character is read.
+    qsizetype i = xmlRefStack.size() - 1;
+    while (i >= 0 && xmlRefStack.at(i).check == ExpansionCheck::None)
+        --i;
 
-    // For every entity, check how many times all entity names were referenced in its value.
-    for (QMap<QString,QString>::const_iterator toSearchIt = entities.constBegin();
-         toSearchIt != entities.constEnd();
-         ++toSearchIt) {
-        const QString &toSearch = toSearchIt.key();
-
-        // Don't check the same entities twice.
-        if (!literalEntitySizes.contains(toSearch)) {
-            // The amount of characters that weren't entity names, but literals, like 'X'.
-            QString leftOvers = entities.value(toSearch);
-            // How many times was entityName referenced by toSearch?
-            for (QMap<QString,QString>::const_iterator referencedIt = entities.constBegin();
-                 referencedIt != entities.constEnd();
-                 ++referencedIt) {
-                const QString &entityName = referencedIt.key();
-
-                for (qsizetype i = 0; i < leftOvers.size() && i != -1; ) {
-                    entityNameBuffer = QLatin1Char('&') + entityName + QLatin1Char(';');
-
-                    i = leftOvers.indexOf(entityNameBuffer, i);
-                    if (i != -1) {
-                        leftOvers.remove(i, entityName.size() + 2);
-                        // The entityName we're currently trying to find was matched in this string; increase our count.
-                        ++referencesToOtherEntities[toSearch][entityName];
-                    }
-                }
-            }
-            literalEntitySizes[toSearch] = leftOvers.size();
-        }
+    if (i < 0) {
+        // This is the outermost entity, start counting.
+        expandedEntityName =
+                entityType == ExpansionCheck::ParameterEntity ? QLatin1Char('%') + name : name;
+        expandedEntitySize = value.size();
+    } else if (i == xmlRefStack.size() - 1) {
+        // The reference ("&name;" or "%name;") is a part of the value of the
+        // enclosing entity, so it was already counted. Replace it with the
+        // value.
+        expandedEntitySize += value.size() - (name.size() + 2);
+    } else {
+        // The reference comes from an entity that does not count towards the
+        // limit (e.g. an external entity) included by the enclosing entity, so
+        // it was not counted.
+        expandedEntitySize += value.size();
     }
 
-    for (QHash<QString, QHash<QString, qsizetype> >::const_iterator entityIt = referencesToOtherEntities.constBegin();
-         entityIt != referencesToOtherEntities.constEnd();
-         ++entityIt) {
-        const QString &entity = entityIt.key();
-
-        QHash<QString, qsizetype>::iterator expandedIt = expandedSizes.find(entity);
-        if (expandedIt == expandedSizes.end()) {
-            expandedIt = expandedSizes.insert(entity, literalEntitySizes.value(entity));
-            for (QHash<QString, qsizetype>::const_iterator referenceIt = entityIt->constBegin();
-                 referenceIt != entityIt->constEnd();
-                 ++referenceIt) {
-                const QString &referenceTo = referenceIt.key();
-                const qsizetype references = referencesToOtherEntities.value(entity).value(referenceTo);
-                // The total size of an entity's value is the expanded size of all of its referenced entities, plus its literal size.
-                *expandedIt += expandedSizes.value(referenceTo) * references + literalEntitySizes.value(referenceTo) * references;
-            }
-
-            if (*expandedIt > entityCharacterLimit) {
-                if (errorMessage) {
-                    *errorMessage = QString::fromLatin1("The XML entity \"%1\" expands to a string that is too large to process (%2 characters > %3).")
-                        .arg(entity, QString::number(*expandedIt), QString::number(entityCharacterLimit));
-                }
-                return true;
-            }
+    if (expandedEntitySize > entityCharacterLimit) {
+        if (errorMessage) {
+            *errorMessage = QString::fromLatin1("The XML entity \"%1\" expands to a string that "
+                                                "is too large to process (%2 characters > %3).")
+                    .arg(expandedEntityName, QString::number(expandedEntitySize),
+                         QString::number(entityCharacterLimit));
         }
+        return true;
     }
     return false;
 }
@@ -6508,12 +6594,6 @@ bool QXmlSimpleReaderPrivate::parseEntityDecl()
         switch (state) {
             case EValue:
                 if ( !entityExist(name())) {
-                    QString errorMessage;
-                    if (isExpandedEntityValueTooLarge(&errorMessage)) {
-                        reportParseError(errorMessage);
-                        return false;
-                    }
-
                     entities.insert(name(), string());
                     if (declHnd) {
                         if (!declHnd->internalEntityDecl(name(), string())) {
@@ -6791,6 +6871,7 @@ bool QXmlSimpleReaderPrivate::parseEntityValue()
         switch (state) {
             case Dq:
             case Sq:
+                includedParameterEntitySize = 0;
                 stringClear();
                 next();
                 break;
@@ -7366,13 +7447,13 @@ bool QXmlSimpleReaderPrivate::processReference()
             switch (parseReference_context) {
                 case InContent:
                     // Included
-                    if (!insertXmlRef(*it, reference, false))
+                    if (!insertXmlRef(*it, reference, false, ExpansionCheck::GeneralEntity))
                         return false;
                     parseReference_charDataRead = false;
                     break;
                 case InAttributeValue:
                     // Included in literal
-                    if (!insertXmlRef(*it, reference, true))
+                    if (!insertXmlRef(*it, reference, true, ExpansionCheck::GeneralEntity))
                         return false;
                     parseReference_charDataRead = false;
                     break;
@@ -7562,18 +7643,29 @@ bool QXmlSimpleReaderPrivate::parseString()
   This private function inserts and reports an entity substitution. The
   substituted string is \a data and the name of the entity reference is \a
   name. If \a inLiteral is true, the entity is IncludedInLiteral (i.e., " and '
-  must be quoted. Otherwise they are not quoted.
+  must be quoted. Otherwise they are not quoted. Unless \a check is
+  ExpansionCheck::None, the size of the substitution is checked against the
+  expansion limit.
 
   This function returns \c false on error.
 */
-bool QXmlSimpleReaderPrivate::insertXmlRef(const QString &data, const QString &name, bool inLiteral)
+bool QXmlSimpleReaderPrivate::insertXmlRef(const QString &data, const QString &name, bool inLiteral,
+                                           ExpansionCheck check)
 {
+    if (check != ExpansionCheck::None) {
+        QString errorMessage;
+        if (addToExpandedEntitySize(name, data, check, &errorMessage)) {
+            reportParseError(errorMessage);
+            return false;
+        }
+    }
     if (inLiteral) {
         QString tmp = data;
-        xmlRefStack.push(XmlRef(name, tmp.replace(QLatin1Char('\"'),
-                            QLatin1String("&quot;")).replace(QLatin1Char('\''), QLatin1String("&apos;"))));
+        xmlRefStack.push(XmlRef(name, tmp.replace(QLatin1Char('\"'), QLatin1String("&quot;"))
+                                         .replace(QLatin1Char('\''), QLatin1String("&apos;")),
+                                check));
     } else {
-        xmlRefStack.push(XmlRef(name, data));
+        xmlRefStack.push(XmlRef(name, data, check));
     }
     qsizetype n = qMax(parameterEntities.size(), entities.size());
     if (xmlRefStack.size() > n+1) {

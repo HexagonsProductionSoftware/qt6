@@ -11,6 +11,9 @@
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0004.diff
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0005.diff
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0006.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105925-qt5compat-6.8.zip / CVE-2026-105925-qt5compat-6.8-0002.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105925-qt5compat-6.8.zip / CVE-2026-105925-qt5compat-6.8-0003.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105925-qt5compat-6.8.zip / CVE-2026-105925-qt5compat-6.8-0004.diff
 
 #ifndef QXML_P_H
 #define QXML_P_H
@@ -78,17 +81,25 @@ private:
     QMap<QString,ExternEntity> externEntities;
     QMap<QString,QString> entities;
 
+    enum class ExpansionCheck
+    {
+        None,
+        GeneralEntity,
+        ParameterEntity,
+    };
+
     // used for parsing of entity references
     struct XmlRef {
         XmlRef()
             : index(0) {}
-        XmlRef(const QString &_name, const QString &_value)
-            : name(_name), value(_value), index(0) {}
+        XmlRef(const QString &_name, const QString &_value, ExpansionCheck _check)
+            : name(_name), value(_value), index(0), check(_check) {}
         bool isEmpty() const { return index == value.size(); }
         QChar next() { return value.at(index++); }
         QString name;
         QString value;
         qsizetype index;
+        ExpansionCheck check = ExpansionCheck::None;
     };
     friend class QTypeInfo<XmlRef>;
     QStack<XmlRef> xmlRefStack;
@@ -194,15 +205,24 @@ private:
     int     stringArrayPos;
     QString emptyStr;
 
-    QHash<QString, qsizetype> literalEntitySizes;
-    // The entity at (QMap<QString,) referenced the entities at (QMap<QString,) (qsizetype>) times.
-    QHash<QString, QHash<QString, qsizetype> > referencesToOtherEntities;
-    QHash<QString, qsizetype> expandedSizes;
+    // The outermost entity that is currently being expanded (an internal
+    // general entity, or an internal parameter entity included in the DTD),
+    // and the amount of characters it has expanded to so far.
+    // The parameter entity names are stored with the '%' prefix.
+    QString expandedEntityName;
+    qsizetype expandedEntitySize = 0;
+    // The amount of characters that parameter entity references have contributed
+    // to the parameter entity value that is currently being parsed.
+    qsizetype includedParameterEntitySize = 0;
+
+    int entityCharacterLimit = DefaultEntityCharacterLimit;
+
     // The limit to the amount of times the DTD parsing functions can be called
     // for the DTD currently being parsed.
     static const int dtdRecursionLimit = 2;
-    // The maximum amount of characters an entity value may contain, after expansion.
-    static const int entityCharacterLimit = 4096;
+    // The default maximum amount of characters an entity value may contain,
+    // after expansion.
+    static constexpr int DefaultEntityCharacterLimit = 4096;
 
     const QString &string();
     void stringClear();
@@ -289,7 +309,8 @@ private:
 
     bool parseString();
 
-    bool insertXmlRef(const QString&, const QString&, bool);
+    bool insertXmlRef(const QString&, const QString&, bool,
+                      ExpansionCheck check = ExpansionCheck::None);
 
     bool reportEndEntities();
     void reportParseError(const QString& error);
@@ -299,7 +320,8 @@ private:
     void parseFailed(ParseFunction where, int state);
     void pushParseState(ParseFunction function, int state);
 
-    bool isExpandedEntityValueTooLarge(QString *errorMessage);
+    bool addToExpandedEntitySize(const QString &name, const QString &value,
+                                 ExpansionCheck entityType, QString *errorMessage);
 
     Q_DECLARE_PUBLIC(QXmlSimpleReader)
     QXmlSimpleReader *q_ptr;

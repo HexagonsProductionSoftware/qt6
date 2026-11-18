@@ -4,6 +4,10 @@
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-100140-qt5compat-6.8.zip / CVE-2026-100140-qt5compat-6.8-0002.diff
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0005.diff
 // Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-97845-qt5compat-6.8.zip / CVE-2026-97845-qt5compat-6.8-0006.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105925-qt5compat-6.8.zip / CVE-2026-105925-qt5compat-6.8-0001.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105925-qt5compat-6.8.zip / CVE-2026-105925-qt5compat-6.8-0002.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105925-qt5compat-6.8.zip / CVE-2026-105925-qt5compat-6.8-0003.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-105925-qt5compat-6.8.zip / CVE-2026-105925-qt5compat-6.8-0004.diff
 
 #include <QDomDocument>
 #include <qthread.h>
@@ -139,6 +143,12 @@ class tst_QXmlSimpleReader : public QObject
         void deepElementNestingIncremental();
 
         void valueLongerThanIntMaxDoesNotCrash();
+
+        void entityExpansionLimitEntityResolver_data();
+        void entityExpansionLimitEntityResolver();
+
+        void entityExpansionProperty_data();
+        void entityExpansionProperty();
 
     private:
         static QDomDocument fromByteArray(const QString &title, const QByteArray &ba, bool *ok);
@@ -793,7 +803,9 @@ void tst_QXmlSimpleReader::dtdRecursionLimit()
         xmlReader.setDeclHandler(&handler);
         xmlReader.setErrorHandler(&handler);
         QVERIFY(!xmlReader.parse(&source));
-        QCOMPARE(handler.recursionCount, 2);
+        // The entity sizes are checked when the entities are expanded, so all
+        // four entities are declared before the expansion in the attribute fails.
+        QCOMPARE(handler.recursionCount, 4);
     }
 }
 
@@ -1072,6 +1084,152 @@ void tst_QXmlSimpleReader::valueLongerThanIntMaxDoesNotCrash()
     } QT_CATCH (const std::bad_alloc &) {
         QSKIP("Not enough memory to accumulate INT_MAX characters.");
     }
+}
+
+void tst_QXmlSimpleReader::entityExpansionLimitEntityResolver_data()
+{
+    QTest::addColumn<QByteArray>("xml");
+    QTest::addColumn<bool>("expectSuccess");
+
+    // The internal entity "outer" references the external parsed entity
+    // "ext", which in turn references the internal entity "e1" twice.
+    // The references to e1 come from the text of the external entity, so they
+    // were not counted as a part of the value of "outer", and the full size of
+    // e1 has to be added for each of them.
+    // The expanded size of "outer" is 5 ("&ext;") + 2 * e1.size()
+
+    const QByteArray xmlStart =
+            "<!DOCTYPE d ["
+            "<!ENTITY ext SYSTEM 'ext.ent'>"
+            "<!ENTITY e1 '";
+
+    const QByteArray withinLimit = QByteArray(EntityCharacterLimit / 2 - 3, 'A');
+    const QByteArray aboveLimit = QByteArray(EntityCharacterLimit / 2, 'A');
+
+    const QByteArray xmlEnd =
+            "'>"
+            "<!ENTITY outer '&ext;'>"
+            "]><d>&outer;</d>";
+
+    // 5 + 2 * (EntityCharacterLimit / 2 - 3) == EntityCharacterLimit - 1
+    QTest::newRow("within_limit") << xmlStart + withinLimit + xmlEnd << true;
+
+    // 5 + 2 * (EntityCharacterLimit / 2) == EntityCharacterLimit + 5.
+    QTest::newRow("exceeds_limit") << xmlStart + aboveLimit + xmlEnd << false;
+}
+
+void tst_QXmlSimpleReader::entityExpansionLimitEntityResolver()
+{
+    class ExternalEntityHandler : public QXmlDefaultHandler
+    {
+    public:
+        explicit ExternalEntityHandler(const QByteArray &externalEntity)
+            : externalEntityData(externalEntity)
+        {
+        }
+
+        bool resolveEntity(const QString &, const QString &systemId,
+                           QXmlInputSource *&ret) override
+        {
+            ++resolveCount;
+            if (systemId == QLatin1String("ext.ent")) {
+                externalEntityBuffer.close();
+                externalEntityBuffer.setData(externalEntityData);
+                externalEntityBuffer.open(QIODevice::ReadOnly);
+                ret = new QXmlInputSource(&externalEntityBuffer);
+            }
+            return true;
+        }
+
+        bool characters(const QString &ch) override
+        {
+            expandedCharacters += ch.size();
+            return true;
+        }
+
+        bool fatalError(const QXmlParseException &exception) override
+        {
+            errorMessage = exception.message();
+            return false;
+        }
+
+        QByteArray externalEntityData;
+        QBuffer externalEntityBuffer;
+        int resolveCount = 0;
+        qsizetype expandedCharacters = 0;
+        QString errorMessage;
+    };
+
+    QFETCH(QByteArray, xml);
+    QFETCH(const bool, expectSuccess);
+
+    QBuffer buffer(&xml);
+    QVERIFY(buffer.open(QIODevice::ReadOnly));
+    QXmlInputSource source(&buffer);
+
+    ExternalEntityHandler handler("&e1;&e1;");
+    QXmlSimpleReader reader;
+    reader.setContentHandler(&handler);
+    reader.setErrorHandler(&handler);
+    reader.setEntityResolver(&handler);
+
+    QCOMPARE(reader.parse(source), expectSuccess);
+    QCOMPARE(handler.errorMessage.isEmpty(), expectSuccess);
+    QCOMPARE_LE(handler.expandedCharacters, EntityCharacterLimit);
+    QCOMPARE(handler.resolveCount, 1);
+}
+
+void tst_QXmlSimpleReader::entityExpansionProperty_data()
+{
+    QTest::addColumn<qint64>("limit");
+    QTest::addColumn<qint64>("expectedLimit");
+    QTest::addColumn<int>("entityLength");
+    QTest::addColumn<bool>("wellFormed");
+
+    QTest::newRow("large_limit_valid_length") << qint64(8192) << qint64(8192) << 8000 << true;
+    QTest::newRow("small_limit_invalid_length") << qint64(32) << qint64(32) << 64 << false;
+    QTest::newRow("zero_limit_uses_default") << qint64(0) << qint64(4096) << 5000 << false;
+    QTest::newRow("negative_limit_uses_default") << qint64(-1) << qint64(4096) << 4000 << true;
+    if constexpr (sizeof(qintptr) > sizeof(int)) {
+        QTest::newRow("too_large_limit_uses_default")
+                << qint64(std::numeric_limits<int>::max()) + 1 << qint64(4096) << 5000 << false;
+    }
+}
+
+void tst_QXmlSimpleReader::entityExpansionProperty()
+{
+    QFETCH(const qint64, limit);
+    QFETCH(const qint64, expectedLimit);
+    QFETCH(const int, entityLength);
+    QFETCH(const bool, wellFormed);
+
+    constexpr const char *propName = "http://qt-project.org/xml/properties/entity-expansion-limit";
+
+    QXmlSimpleReader reader;
+
+    QVERIFY(reader.hasProperty(QLatin1String(propName)));
+
+    bool ok = false;
+    void *value = reader.property(QLatin1String(propName), &ok);
+    QVERIFY(ok);
+    QCOMPARE(reinterpret_cast<qintptr>(value), qintptr(4096));
+
+    reader.setProperty(QLatin1String(propName), reinterpret_cast<void *>(qintptr(limit)));
+
+    // verify the limit
+    ok = false;
+    value = reader.property(QLatin1String(propName), &ok);
+    QVERIFY(ok);
+    QCOMPARE(reinterpret_cast<qintptr>(value), qintptr(expectedLimit));
+
+    QByteArray xml =
+            "<!DOCTYPE d [<!ENTITY e '" + QByteArray(entityLength, 'A') + "'>]><d>&e;</d>";
+
+    QBuffer buffer(&xml);
+    QVERIFY(buffer.open(QIODevice::ReadOnly));
+    QXmlInputSource source(&buffer);
+
+    QCOMPARE(reader.parse(source), wellFormed);
 }
 
 QTEST_MAIN(tst_QXmlSimpleReader)
