@@ -103,4 +103,8 @@
       - qt5compat/src/core5/sax/qxml_p.h
    - CVE-2026-100140-qt5compat-6.8-0004.diff
       - qt5compat/src/core5/sax/qxml.cpp
-   
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-111487-qt3d-6.8-0001.diff (#44)
+   - qt3d/src/plugins/sceneparsers/assimp/assimpimporter.cpp
+   /!\ The following files haven't been updated as they don't exist in Qt 6.8.5:
+   qt3d/tests/auto/render/assimpplugin/CMakeLists.txt
+   qt3d/tests/auto/render/assimpplugin/tst_assimpplugin.cpp
