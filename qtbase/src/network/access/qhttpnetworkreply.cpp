@@ -1,6 +1,9 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-116337-qtbase-6.8-0001.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-116337-qtbase-6.8-0002.diff
+
 #include "qhttpnetworkreply_p.h"
 #include "qhttpnetworkconnection_p.h"
 
@@ -422,6 +425,16 @@ qint64 QHttpNetworkReplyPrivate::readStatus(QIODevice *socket)
             fragment.clear();
             return -1;
         }
+
+        // Don't let a peer that never terminates the status line make us
+        // grow 'fragment' without bound. Newer Qt versions limit the reason
+        // phrase to 1024 bytes so use the same bound here, plus a generous
+        // allowance for the rest of the line.
+        constexpr qsizetype MaxStatusLineSize = 1024 + 64;
+        if (fragment.size() > MaxStatusLineSize) {
+            fragment.clear();
+            return -1;
+        }
     } while (haveRead == 1);
 
     return bytes;
@@ -456,6 +469,12 @@ qint64 QHttpNetworkReplyPrivate::readHeader(QIODevice *socket)
         } else {
             fragment.append(c);
             bytes++;
+
+            // Enforce the total header size limit while accumulating.
+            if (fragment.size() > parser.maxRawHeaderSize()) {
+                fragment.clear();
+                return -1;
+            }
 
             if (c == '\n') {
                 // check for possible header endings. As per HTTP rfc,

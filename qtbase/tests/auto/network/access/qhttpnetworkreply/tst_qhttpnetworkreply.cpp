@@ -1,6 +1,8 @@
 // Copyright (C) 2022 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-116337-qtbase-6.8-0001.diff
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-116337-qtbase-6.8-0002.diff
 
 #include <QTest>
 #include <QtCore/QBuffer>
@@ -21,6 +23,11 @@ private Q_SLOTS:
 
     void parseEndOfHeader_data();
     void parseEndOfHeader();
+
+    void headerSizeLimit_data();
+    void headerSizeLimit();
+
+    void statusLineSizeLimit();
 };
 
 void tst_QHttpNetworkReply::parseHeader_data()
@@ -230,6 +237,72 @@ void tst_QHttpNetworkReply::parseEndOfHeader()
     QHttpNetworkReplyPrivate *replyPrivate = reply.replyPrivate();
     qint64 headerBytes = replyPrivate->readHeader(&socket);
     QCOMPARE(headerBytes, lengths);
+}
+
+void tst_QHttpNetworkReply::statusLineSizeLimit()
+{
+    // A status line that is never terminated must be rejected once it can
+    // no longer be valid, instead of being buffered indefinitely.
+    const QByteArray status = "HTTP/1.1 200 " + QByteArray(1024 * 1024, 'a');
+    TestHeaderSocket socket(status);
+    TestHeaderReply reply;
+    QHttpNetworkReplyPrivate *replyPrivate = reply.replyPrivate();
+
+    QCOMPARE(replyPrivate->readStatus(&socket), qint64(-1));
+    QVERIFY(replyPrivate->fragment.isEmpty());
+    QCOMPARE_LT(socket.inputBuffer.pos(), 4096);
+
+    // The longest acceptable reason phrase still parses.
+    const QByteArray okStatus = "HTTP/1.1 200 " + QByteArray(1024, 'a') + "\r\n";
+    TestHeaderSocket okSocket(okStatus);
+    TestHeaderReply okReply;
+    QCOMPARE(okReply.replyPrivate()->readStatus(&okSocket), qint64(okStatus.size()));
+    QCOMPARE(okReply.statusCode(), 200);
+}
+
+void tst_QHttpNetworkReply::headerSizeLimit_data()
+{
+    QTest::addColumn<QByteArray>("headers");
+    QTest::addColumn<bool>("accepted");
+
+    // Limit used below is 64 bytes of header content.
+    const QByteArray field = "X-Field: " + QByteArray(40, 'a'); // 49 bytes
+
+    QTest::newRow("empty") << QByteArray("\r\n") << true;
+    QTest::newRow("within-limit") << QByteArray(field + "\r\n\r\n") << true;
+    QTest::newRow("within-limit-LFLF") << QByteArray(field + "\n\n") << true;
+    QTest::newRow("at-limit") << QByteArray("X-Field: " + QByteArray(55, 'a') + "\r\n\r\n")
+                              << true;
+    QTest::newRow("over-limit-terminated")
+            << QByteArray(field + "\r\n" + field + "\r\n\r\n") << false;
+    QTest::newRow("over-limit-unterminated") << QByteArray("X-Field: " + QByteArray(4096, 'a'))
+                                             << false;
+    QTest::newRow("over-limit-unterminated-lines")
+            << QByteArray(field + "\r\n").repeated(100) << false;
+}
+
+void tst_QHttpNetworkReply::headerSizeLimit()
+{
+    QFETCH(QByteArray, headers);
+    QFETCH(bool, accepted);
+
+    TestHeaderSocket socket(headers);
+    TestHeaderReply reply;
+    QHttpNetworkReplyPrivate *replyPrivate = reply.replyPrivate();
+    replyPrivate->parser.setMaxTotalHeaderSize(64);
+
+    const qint64 headerBytes = replyPrivate->readHeader(&socket);
+    if (accepted) {
+        QCOMPARE(headerBytes, qint64(headers.size()));
+        QCOMPARE(replyPrivate->state, QHttpNetworkReplyPrivate::ReadingDataState);
+    } else {
+        QCOMPARE(headerBytes, qint64(-1));
+        QCOMPARE_NE(replyPrivate->state, QHttpNetworkReplyPrivate::ReadingDataState);
+        // Nothing may be retained from the rejected block.
+        QVERIFY(replyPrivate->fragment.isEmpty());
+        // Must stop reading as soon as the limit is exceeded, not consume everything.
+        QCOMPARE_LE(socket.inputBuffer.pos(), replyPrivate->parser.maxRawHeaderSize() + 1);
+    }
 }
 
 QTEST_MAIN(tst_QHttpNetworkReply)

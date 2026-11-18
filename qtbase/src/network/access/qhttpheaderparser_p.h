@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 // Qt-Security score:significant reason:default
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-116337-qtbase-6.8-0002.diff
+
 #ifndef QHTTPHEADERPARSER_H
 #define QHTTPHEADERPARSER_H
 
@@ -81,6 +83,14 @@ public:
 
     void setMaxTotalHeaderSize(qsizetype size) { maxTotalSize = size; }
     qsizetype maxTotalHeaderSize() const { return maxTotalSize; }
+
+    qsizetype maxRawHeaderSize() const {
+        constexpr qsizetype TrailingLineEndings = 4;
+        qsizetype result;
+        if (qAddOverflow(maxTotalSize, TrailingLineEndings, &result))
+            return (std::numeric_limits<qsizetype>::max)();
+        return result;
+    }
 
     void setMaxHeaderFields(qsizetype count) { maxFieldCount = count; }
     qsizetype maxHeaderFields() const { return maxFieldCount; }

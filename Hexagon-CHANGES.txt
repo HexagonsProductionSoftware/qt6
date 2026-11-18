@@ -141,4 +141,10 @@
       - qt5compat/src/core5/sax/qxml.cpp
       - qt5compat/src/core5/sax/qxml_p.h
       - qt5compat/tests/auto/core5/sax/qxmlsimplereader/tst_qxmlsimplereader.cpp
-   
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-116337-qtbase-6.8-0001.diff (#50)
+   - qtbase/src/network/access/qhttpnetworkreply.cpp
+   - qtbase/tests/auto/network/access/qhttpnetworkreply/tst_qhttpnetworkreply.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-116337-qtbase-6.8-0002.diff (#51)
+   - qtabse/src/network/access/qhttpheaderparser_p.h
+   - qtbase/src/network/access/qhttpnetworkreply.cpp
+   - qtbase/tests/auto/network/access/qhttpnetworkreply/tst_qhttpnetworkreply.cpp
