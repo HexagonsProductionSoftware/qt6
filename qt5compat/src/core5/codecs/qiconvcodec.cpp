@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 // Qt-Security score:critical reason:data-parser
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-107590-qt5compat-6.8.diff
+
 #include <QtCore/private/qglobal_p.h>
 
 #include "qiconvcodec_p.h"
@@ -296,7 +298,7 @@ QByteArray QIconvCodec::convertFromUnicode(const QChar *uc, int len, ConverterSt
     QByteArray in;
     if (convState && convState->remainingChars) {
         // we have one surrogate char to be prepended
-        in.resize(sizeof(QChar) + len);
+        in.resize(sizeof(QChar) + inBytesLeft);
         inBytes = in.data();
 
         QChar remaining(convState->state_data[0]);
