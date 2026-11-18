@@ -1,6 +1,8 @@
 // Copyright (C) 2016 Research In Motion
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-120973-qtconnectivity-6.8-0001.diff
+
 #include <QtTest/QtTest>
 
 #include <qndefrecord.h>
@@ -490,6 +492,15 @@ void tst_QNdefNfcSmartPosterRecord::tst_construct()
 
     QVERIFY(record == sprecord);
     QVERIFY(!(record != sprecord));
+
+    // Construct from an empty QNdefRecrod
+    {
+        QNdefRecord empty;
+        QNdefNfcSmartPosterRecord rec(empty);
+        QCOMPARE(rec.type(), "Sp");
+        QCOMPARE(rec.typeNameFormat(), QNdefRecord::NfcRtd);
+        QVERIFY(rec.payload().isEmpty());
+    }
 }
 
 void tst_QNdefNfcSmartPosterRecord::tst_downcast()

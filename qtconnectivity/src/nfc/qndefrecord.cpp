@@ -1,6 +1,7 @@
 // Copyright (C) 2016 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-120973-qtconnectivity-6.8-0001.diff
 
 #include "qndefrecord.h"
 #include "qndefrecord_p.h"
@@ -144,7 +145,7 @@ QNdefRecord::QNdefRecord(const QNdefRecord &other)
 QNdefRecord::QNdefRecord(const QNdefRecord &other, TypeNameFormat typeNameFormat,
                          const QByteArray &type)
 {
-    if (other.d->typeNameFormat == quint8(typeNameFormat) && other.d->type == type) {
+    if (other.d && other.d->typeNameFormat == quint8(typeNameFormat) && other.d->type == type) {
         d = other.d;
     } else {
         d = new QNdefRecordPrivate;
@@ -162,7 +163,7 @@ QNdefRecord::QNdefRecord(const QNdefRecord &other, TypeNameFormat typeNameFormat
 */
 QNdefRecord::QNdefRecord(const QNdefRecord &other, TypeNameFormat typeNameFormat)
 {
-    if (other.d->typeNameFormat == quint8(typeNameFormat)) {
+    if (other.d && other.d->typeNameFormat == quint8(typeNameFormat)) {
         d = other.d;
     } else {
         d = new QNdefRecordPrivate;

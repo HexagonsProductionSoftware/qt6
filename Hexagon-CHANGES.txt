@@ -180,3 +180,8 @@
       - qt5compat/tests/auto/core5/sax/qxmlsimplereader/tst_qxmlsimplereader.cpp
 - Applied https://download.qt.io/archive/qt/6.8/CVE-2026-105943-qtbase-6.8.diff (#55)
    - qtbase/src/network/kernel/qauthenticator.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-120973-qtconnectivity-6.8-0001.diff (#56)
+   - qtconnectivity/src/nfc/qndefrecord.cpp
+   - qtconnectivity/tests/auto/qndefnfcsmartposterrecord/tst_qndefnfcsmartposterrecord.cpp
+   - qtconnectivity/tests/auto/qndefrecord/tst_qndefrecord.cpp
+   
