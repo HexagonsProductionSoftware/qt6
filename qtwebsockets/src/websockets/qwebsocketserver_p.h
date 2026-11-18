@@ -1,6 +1,8 @@
 // Copyright (C) 2016 Kurt Pattyn <pattyn.kurt@gmail.com>.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-114369-qtwebsockets-6.8.zip / CVE-2026-114369-qtwebsockets-6.8-0002.diff
+
 #ifndef QWEBSOCKETSERVER_P_H
 #define QWEBSOCKETSERVER_P_H
 //
@@ -104,6 +106,8 @@ private:
     QString m_errorString;
     int m_maxPendingConnections;
     int m_handshakeTimeout;
+
+    QHash<QTcpSocket *, QByteArray> m_preHandshakeHeaders;
 
     void addPendingConnection(QWebSocket *pWebSocket);
     void setErrorFromSocketError(QAbstractSocket::SocketError error,

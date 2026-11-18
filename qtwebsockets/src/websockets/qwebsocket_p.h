@@ -1,6 +1,8 @@
 // Copyright (C) 2016 Kurt Pattyn <pattyn.kurt@gmail.com>.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-114369-qtwebsockets-6.8.zip / CVE-2026-114369-qtwebsockets-6.8-0001.diff
+
 #ifndef QWEBSOCKET_P_H
 #define QWEBSOCKET_P_H
 //
@@ -199,6 +201,7 @@ private:
     void emitErrorOccurred(QAbstractSocket::SocketError error);
 
     QTcpSocket *m_pSocket;
+    QByteArray m_preHandshakeHeaders;
     QString m_errorString;
     QWebSocketProtocol::Version m_version;
     QUrl m_resource;

@@ -1,6 +1,8 @@
 // Copyright (C) 2016 Kurt Pattyn <pattyn.kurt@gmail.com>.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-114369-qtwebsockets-6.8.zip / CVE-2026-114369-qtwebsockets-6.8-0002.diff
+
 #include "qwebsocketserver.h"
 #include "qwebsocketserver_p.h"
 #include "qwebsocketprotocol.h"
@@ -418,8 +420,11 @@ void QWebSocketServerPrivate::onSocketDisconnected()
     QObject *sender = q->sender();
     if (Q_LIKELY(sender)) {
         QTcpSocket *pTcpSocket = qobject_cast<QTcpSocket*>(sender);
-        if (Q_LIKELY(pTcpSocket))
+        if (Q_LIKELY(pTcpSocket)) {
+            // Drops the partial request of a peer that left mid-handshake
+            m_preHandshakeHeaders.remove(pTcpSocket);
             pTcpSocket->deleteLater();
+        }
     }
 }
 
@@ -434,9 +439,10 @@ void QWebSocketServerPrivate::handshakeReceived()
         return;
     }
     QTcpSocket *pTcpSocket = qobject_cast<QTcpSocket*>(sender);
-    if (Q_UNLIKELY(!pTcpSocket)) {
+    // We are invoked through a queued connection, so on some platforms this runs after
+    // disconnected() has already been emitted.
+    if (Q_UNLIKELY(!pTcpSocket || pTcpSocket->state() != QAbstractSocket::ConnectedState))
         return;
-    }
     //When using Google Chrome the handshake in received in two parts.
     //Therefore, the readyRead signal is emitted twice.
     //This is a guard against the BEAST attack.
@@ -446,24 +452,44 @@ void QWebSocketServerPrivate::handshakeReceived()
     //This is a bug in FireFox (see https://bugzilla.mozilla.org/show_bug.cgi?id=594502)
 
     // According to RFC822 the body is separated from the headers by a null line (CRLF)
-    const QByteArray& endOfHeaderMarker = QByteArrayLiteral("\r\n\r\n");
+    constexpr QByteArrayView endOfHeaderMarker = "\r\n\r\n";
 
-    const qint64 byteAvailable = pTcpSocket->bytesAvailable();
-    QByteArray header = pTcpSocket->peek(byteAvailable);
-    const int endOfHeaderIndex = header.indexOf(endOfHeaderMarker);
-    if (endOfHeaderIndex < 0) {
-        //then we don't have our header complete yet
+    const qint64 maxHeaderLength = QWebSocketPrivate::MAX_HEADERLINE_LENGTH
+        * QWebSocketPrivate::MAX_HEADERLINES + endOfHeaderMarker.size();
+
+    // Collected across readyRead emissions. readLine() never reads past a '\n', so bytes
+    // after the terminator stay in the socket and it can only complete at our end.
+    QByteArray &accumulated = m_preHandshakeHeaders[pTcpSocket];
+
+    // Reused by every iteration below, so a request arriving as many lines at once does
+    // not need a fresh buffer for each of them.
+    QByteArray chunk;
+
+    while (!accumulated.endsWith(endOfHeaderMarker) && pTcpSocket->bytesAvailable() > 0) {
+        // readLine() writes up to maxSize - 1 bytes plus a '\0'
+        const qint64 maxSize = qMin(pTcpSocket->bytesAvailable() + 1,
+                                    qint64(QWebSocketPrivate::MAX_HEADERLINE_LENGTH) + 1);
+        chunk.resize(maxSize);
+        const qint64 lineLength = pTcpSocket->readLine(chunk.data(), maxSize);
+        if (Q_UNLIKELY(lineLength <= 0))
+            break;
+
         //check that no one is trying to exhaust our virtual memory
-        const qint64 maxHeaderLength = QWebSocketPrivate::MAX_HEADERLINE_LENGTH
-            * QWebSocketPrivate::MAX_HEADERLINES + endOfHeaderMarker.size();
-        if (Q_UNLIKELY(byteAvailable > maxHeaderLength)) {
+        if (Q_UNLIKELY(accumulated.size() + lineLength >= maxHeaderLength)) {
+            m_preHandshakeHeaders.remove(pTcpSocket);
             pTcpSocket->close();
             setError(QWebSocketProtocol::CloseCodeTooMuchData,
                  QWebSocketServer::tr("Header is too large."));
+            return;
         }
+        accumulated.append(chunk.constData(), lineLength);
+    }
+
+    if (!accumulated.endsWith(endOfHeaderMarker)) {
+        // The header isn't complete yet
         return;
     }
-    const int headerSize = endOfHeaderIndex + endOfHeaderMarker.size();
+    const QByteArray header = m_preHandshakeHeaders.take(pTcpSocket);
 
     disconnect(pTcpSocket, &QTcpSocket::readyRead,
                this, &QWebSocketServerPrivate::handshakeReceived);
@@ -474,18 +500,6 @@ void QWebSocketServerPrivate::handshakeReceived()
         pTcpSocket->close();
         setError(QWebSocketProtocol::CloseCodeAbnormalDisconnection,
                  QWebSocketServer::tr("Too many pending connections."));
-        return;
-    }
-
-    //don't read past the header
-    header.resize(headerSize);
-    //remove our header from the tcpSocket
-    qint64 skippedSize = pTcpSocket->skip(headerSize);
-
-    if (Q_UNLIKELY(skippedSize != headerSize)) {
-        pTcpSocket->close();
-        setError(QWebSocketProtocol::CloseCodeProtocolError,
-                 QWebSocketServer::tr("Read handshake request header failed."));
         return;
     }
 

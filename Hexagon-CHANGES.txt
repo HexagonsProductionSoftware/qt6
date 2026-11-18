@@ -148,3 +148,15 @@
    - qtabse/src/network/access/qhttpheaderparser_p.h
    - qtbase/src/network/access/qhttpnetworkreply.cpp
    - qtbase/tests/auto/network/access/qhttpnetworkreply/tst_qhttpnetworkreply.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-114369-qtwebsockets-6.8.zip (#52)
+   /!\ Patches in the __MACOSX subdirectory have been ignored.
+   - CVE-2026-114369-qtwebsockets-6.8-0001.diff
+      - qtwebsockets/src/websockets/qwebsocket_p.cpp
+      - qtwebsockets/src/websockets/qwebsocket_p.h
+      - qtwebsockets/tests/auto/websockets/qwebsocket/tst_qwebsocket.cpp
+   - CVE-2026-114369-qtwebsockets-6.8-0002.diff
+      - qtwebsockets/src/websockets/qwebsocketserver_p.cpp
+      - qtwebsockets/src/websockets/qwebsocketserver_p.h
+      - qtwebsockets/tests/auto/websockets/qwebsocketserver/tst_qwebsocketserver.cpp
+   - CVE-2026-114369-qtwebsockets-6.8-0003.diff
+      /!\ This patch not applied due to context uncertainty.
