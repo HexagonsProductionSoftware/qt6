@@ -1,6 +1,8 @@
 // Copyright (C) 2016 Kurt Pattyn <pattyn.kurt@gmail.com>.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-114366-qtwebsockets-6.8-0001.diff
+
 #include "qwebsocket.h"
 #include "qwebsocket_p.h"
 #include "qwebsocketprotocol_p.h"
@@ -464,6 +466,11 @@ void QWebSocketPrivate::open(const QNetworkRequest &request,
         m_dataProcessor->clear();
         m_isClosingHandshakeReceived = false;
         m_isClosingHandshakeSent = false;
+
+        m_authenticator = QAuthenticator();
+        m_bytesToSkipBeforeNewResponse = 0;
+        m_needsResendWithCredentials = false;
+        m_needsReconnect = false;
 
         setRequest(request, options);
         if (url.path().isEmpty())
