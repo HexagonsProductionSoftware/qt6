@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 // Qt-Security score:critical reason:data-parser
 
+// Hexagon-CHANGES: https://download.qt.io/archive/qt/6.8/CVE-2026-107479-qt5compat-6.8.diff
+
 #include "qplatformdefs.h"
 
 #include "qtextcodec.h"
@@ -13,6 +15,7 @@
 #include "qfile.h"
 #include "qlist.h"
 #include <private/qlocking_p.h>
+#include <QtCore/qloggingcategory.h>
 #include "qstringlist.h"
 #include "qvarlengtharray.h"
 
@@ -59,6 +62,8 @@
 
 QT_BEGIN_NAMESPACE
 
+Q_LOGGING_CATEGORY(lcTextCodec, "qt.core5compat.qtextcodec");
+
 // in qstring.cpp:
 void qt_from_latin1(char16_t *dst, const char *str, size_t size) noexcept;
 
@@ -68,6 +73,16 @@ typedef QList<QByteArray>::ConstIterator ByteArrayListConstIt;
 Q_GLOBAL_STATIC(QRecursiveMutex, textCodecsMutex);
 
 Q_GLOBAL_STATIC(QTextCodecData, textCodecData)
+
+static bool inputFitsIntoInt(quint64 input)
+{
+    if (input > uint{(std::numeric_limits<int>::max)()}) {
+        qCWarning(lcTextCodec, "The input data is too long (%llu > INT_MAX). "
+                               "Pass it in smaller chunks instead.", qulonglong(input));
+        return false;
+    }
+    return true;
+}
 
 QTextCodecData::QTextCodecData()
     : codecForLocale(nullptr)
@@ -779,12 +794,24 @@ QTextEncoder* QTextCodec::makeEncoder(QTextCodec::ConversionFlags flags) const
     The \a state of the convertor used is updated.
 */
 
+/*
+//! [to-from-unicode-long-input]
+    \note if the input exceeds \c {INT_MAX}, this function does not perform
+    any conversion and returns an empty \1. For longer inputs, implement the
+    chunking on the calling side, using the overload that takes ConverterState.
+//! [to-from-unicode-long-input]
+*/
+
 /*!
     Converts \a str from Unicode to the encoding of this codec, and
     returns the result in a QByteArray.
+
+    \include qtextcodec.cpp {to-from-unicode-long-input} {QByteArray}
 */
 QByteArray QTextCodec::fromUnicode(const QString& str) const
 {
+    if (!inputFitsIntoInt(str.size()))
+        return QByteArray();
     ConverterState state = DefaultConversion | Flag::Stateless;
     return convertFromUnicode(str.constData(), str.size(), &state);
 }
@@ -795,9 +822,13 @@ QByteArray QTextCodec::fromUnicode(const QString& str) const
 
     Converts \a str from Unicode to the encoding of this codec, and
     returns the result in a QByteArray.
+
+    \include qtextcodec.cpp {to-from-unicode-long-input} {QByteArray}
 */
 QByteArray QTextCodec::fromUnicode(QStringView str) const
 {
+    if (!inputFitsIntoInt(str.size()))
+        return QByteArray();
     ConverterState state = DefaultConversion | Flag::Stateless;
     return convertFromUnicode(str.data(), str.size(), &state);
 }
@@ -816,9 +847,13 @@ QByteArray QTextCodec::fromUnicode(QStringView str) const
 /*!
     Converts \a a from the encoding of this codec to Unicode, and
     returns the result in a QString.
+
+    \include qtextcodec.cpp {to-from-unicode-long-input} {QString}
 */
 QString QTextCodec::toUnicode(const QByteArray& a) const
 {
+    if (!inputFitsIntoInt(a.size()))
+        return QString();
     ConverterState state = DefaultConversion | Flag::Stateless;
     return convertToUnicode(a.constData(), a.size(), &state);
 }
@@ -839,9 +874,16 @@ bool QTextCodec::canEncode(QChar ch) const
     \overload
 
     \a s contains the string being tested for encode-ability.
+
+//! [can-encode-long-input]
+    \note if the input size exceeds \c {INT_MAX}, this function does
+    not perform any checks and returns \c false.
+//! [can-encode-long-input]
 */
 bool QTextCodec::canEncode(const QString& s) const
 {
+    if (!inputFitsIntoInt(s.size()))
+        return false;
     ConverterState state;
     state.flags = ConvertInvalidToNull;
     convertFromUnicode(s.constData(), s.size(), &state);
@@ -854,9 +896,13 @@ bool QTextCodec::canEncode(const QString& s) const
 
     Returns \c true if the Unicode string \a s can be fully encoded
     with this codec; otherwise returns \c false.
+
+    \include qtextcodec.cpp can-encode-long-input
 */
 bool QTextCodec::canEncode(QStringView s) const
 {
+    if (!inputFitsIntoInt(s.size()))
+        return false;
     ConverterState state;
     state.flags = ConvertInvalidToNull;
     convertFromUnicode(s.data(), s.size(), &state);
@@ -866,11 +912,17 @@ bool QTextCodec::canEncode(QStringView s) const
     \overload
 
     \a chars contains the source characters.
+
+    \include qtextcodec.cpp {to-from-unicode-long-input} {QString}
 */
 QString QTextCodec::toUnicode(const char *chars) const
 {
-    const auto len = int(qstrlen(chars));
-    return convertToUnicode(chars, len, nullptr);
+    if (!chars)
+        return QString(); // trivially true for all encodings
+    const size_t len = strlen(chars);
+    if (!inputFitsIntoInt(len))
+        return QString();
+    return convertToUnicode(chars, int(len), nullptr);
 }
 
 

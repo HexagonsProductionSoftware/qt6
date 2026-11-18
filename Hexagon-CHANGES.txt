@@ -118,3 +118,6 @@
 - Applied https://download.qt.io/archive/qt/6.8/CVE-2026-103653-qtcoap-6.8-0002.diff (#47)
    - qtcoap/src/coap/qcoapinternalreply.cpp
    - qtcoap/tests/auto/qcoapinternalreply/tst_qcoapinternalreply.cpp
+- Applied https://download.qt.io/archive/qt/6.8/CVE-2026-107479-qt5compat-6.8.diff (#48)
+   - qt5compat/src/core5/codecs/qtextcodec.cpp
+   
