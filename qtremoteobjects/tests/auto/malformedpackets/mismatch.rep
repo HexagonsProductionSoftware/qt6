@@ -1,0 +1,51 @@
+// Copyright (C) 2026 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+
+#include <QtCore/qrect.h>
+
+// The types used here intentionally do not match the types of the
+// QObject-based source in tst_malformedpackets.cpp, where all the
+// properties and slot arguments are QString.
+// int can be converted to QString, QRectF cannot.
+//
+// The argument count of the tooMany/tooFew/noArgs slots and signals also
+// intentionally does not match the source. "Too many" and "too few" are
+// from the point of view of the sender, so the replica for slots, and the
+// source for signals.
+class MismatchedObject
+{
+    PROP(int convertibleValue READWRITE)
+    PROP(QRectF nonConvertibleValue READWRITE)
+    SLOT(void convertibleSlot(int arg))
+    SLOT(void nonConvertibleSlot(QRectF arg))
+    // The source slot takes one argument
+    SLOT(void tooManyArgsSlot(int a, int b))
+    // The source slot takes two arguments
+    SLOT(void tooFewArgsSlot(int a))
+    // The slot for testing "Registry" object
+    SLOT(void noArgSlot())
+    // The source signal has two arguments
+    SIGNAL(tooManyArgsSignal(int a))
+    // The source signal has one argument
+    SIGNAL(tooFewArgsSignal(int a, int b))
+    // The source signal has no arguments
+    SIGNAL(noArgsSignal(int a))
+}
+
+// The object that is used to test property count mismatch between source
+// and replica. The replica will have two properties, and it will be acquired
+// for different sources - with one property, and with three properties.
+class TwoPropertyObject
+{
+    PROP(int prop1 READWRITE)
+    PROP(int prop2 READWRITE)
+}
+
+// The object that is used to test property count mismatch for nested child
+// objects. The child replica has two properties, and the source child object
+// has either one or three properties.
+class ParentWithChild
+{
+    PROP(int value READONLY)
+    CLASS child(TwoPropertyObject)
+}

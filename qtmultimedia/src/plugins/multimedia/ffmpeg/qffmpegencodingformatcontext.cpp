@@ -1,0 +1,114 @@
+// Copyright (C) 2024 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+
+#include "qffmpegencodingformatcontext_p.h"
+
+#include <QtFFmpegMediaPluginImpl/private/qffmpegmediaformatinfo_p.h>
+#include <QtFFmpegMediaPluginImpl/private/qffmpegioutils_p.h>
+#include <QtCore/qfile.h>
+#include <QtCore/qloggingcategory.h>
+
+QT_BEGIN_NAMESPACE
+
+namespace QFFmpeg {
+
+Q_STATIC_LOGGING_CATEGORY(qLcEncodingFormatContext, "qt.multimedia.ffmpeg.encodingformatcontext");
+
+namespace {
+// In the example https://ffmpeg.org/doxygen/trunk/avio_read_callback_8c-example.html,
+// BufferSize = 4096 is suggested, however, it might be not optimal. To be investigated.
+constexpr size_t DefaultBufferSize = 4096;
+} // namespace
+
+EncodingFormatContext::EncodingFormatContext(QMediaFormat::FileFormat fileFormat)
+    : m_avFormatContext(avformat_alloc_context())
+{
+    const AVOutputFormat *avFormat = QFFmpegMediaFormatInfo::outputFormatForFileFormat(fileFormat);
+    m_avFormatContext->oformat = const_cast<AVOutputFormat *>(avFormat); // constness varies
+}
+
+EncodingFormatContext::~EncodingFormatContext()
+{
+    closeAVIO();
+}
+
+bool EncodingFormatContext::openAVIO(const QString &filePath)
+{
+    Q_ASSERT(!isAVIOOpen());
+    Q_ASSERT(!filePath.isEmpty());
+
+    const QByteArray filePathUtf8 = filePath.toUtf8();
+
+    std::unique_ptr<char, AVFreeDeleter> url(
+            reinterpret_cast<char *>(av_malloc(filePathUtf8.size() + 1)));
+    memcpy(url.get(), filePathUtf8.constData(), filePathUtf8.size() + 1);
+
+    // Initialize the AVIOContext for accessing the resource indicated by the url
+    auto result = avio_open2(&m_avFormatContext->pb, url.get(), AVIO_FLAG_WRITE, nullptr, nullptr);
+
+    qCDebug(qLcEncodingFormatContext)
+            << "opened by file path:" << url.get() << ", result:" << result;
+
+    Q_ASSERT(m_avFormatContext->url == nullptr);
+    if (isAVIOOpen()) {
+        m_avFormatContext->url = url.release();
+        return true;
+    } else {
+        return openAVIOWithQFile(filePath);
+    }
+}
+
+bool EncodingFormatContext::openAVIOWithQFile(const QString &filePath)
+{
+    // QTBUG-123082, To be investigated:
+    // - should we use the logic with QFile for all file paths?
+    // - does avio_open2 handle network protocols that QFile doesn't?
+    // - which buffer size should we set to opening with QFile to ensure the best performance?
+
+    auto file = std::make_unique<QFile>(filePath);
+
+    if (!file->open(QFile::WriteOnly)) {
+        qCDebug(qLcEncodingFormatContext) << "Cannot open QFile" << filePath;
+        return false;
+    }
+
+    bool success = openAVIO(file.get());
+    if (success)
+        m_outputFile = std::move(file);
+    return success;
+}
+
+bool EncodingFormatContext::openAVIO(QIODevice *device)
+{
+    Q_ASSERT(!isAVIOOpen());
+    Q_ASSERT(device);
+
+    if (!device->isWritable())
+        return false;
+
+    auto buffer = static_cast<uint8_t *>(av_malloc(DefaultBufferSize));
+    m_avFormatContext->pb = avio_alloc_context(buffer, DefaultBufferSize, 1, device, nullptr,
+                                               &writeQIODevice, &seekQIODevice);
+    return bool(m_avFormatContext->pb);
+}
+
+void EncodingFormatContext::closeAVIO()
+{
+    // Close the AVIOContext and release any file handles
+    if (isAVIOOpen()) {
+        if (m_avFormatContext->url && *m_avFormatContext->url != '\0') {
+            auto closeResult = avio_closep(&m_avFormatContext->pb);
+            Q_ASSERT(closeResult == 0);
+        } else {
+            freeAVIOContext(m_avFormatContext->pb);
+        }
+
+        m_outputFile.reset();
+    } else {
+        Q_ASSERT(!m_outputFile);
+    }
+}
+
+} // namespace QFFmpeg
+
+QT_END_NAMESPACE

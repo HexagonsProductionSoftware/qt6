@@ -1,0 +1,92 @@
+// Copyright (C) 2024 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+
+#include "tst_qqmljsutils.h"
+#include <QtQmlCompiler/private/qqmljsutils_p.h>
+
+#include <QtCore/qdir.h>
+#include <QtCore/qscopeguard.h>
+
+using namespace Qt::StringLiterals;
+
+void tst_qqmljsutils::findResourceFilesFromBuildFolders()
+{
+    const QString buildFolder = testFile("buildfolder");
+    const QStringList resourceFiles = QQmlJSUtils::resourceFilesFromBuildFolders({ buildFolder});
+    QCOMPARE(resourceFiles,
+             QStringList{ testFile(u"buildfolder/.qt/rcc/appuntitled72_raw_qml_0.qrc"_s) });
+};
+
+void tst_qqmljsutils::qmlFileSourcePathFromBuildPath_data()
+{
+    QTest::addColumn<QString>("buildFolder");
+    QTest::addColumn<QString>("buildFile");
+    QTest::addColumn<QString>("expectedSourceFile");
+
+    QTest::addRow("Main.qml") << testFile(u"mymodule-build"_s)
+                              << testFile(u"mymodule-build/MyModule/Main.qml"_s)
+                              << testFile(u"mymodule-source/MyModule/Main.qml"_s);
+    QTest::addRow("NestedModuleWithPrefers")
+            << testFile(u"mymodule-build"_s)
+            << testFile(u"mymodule-build/MyModule/X/Y/Z/MyComponent.qml"_s)
+            << testFile(u"mymodule-source/MyModule/X/Y/Z/MyComponent.qml"_s);
+    QTest::addRow("NestedModuleWithoutPrefers")
+            << testFile(u"mymodule-build-without-qmldir-prefer"_s)
+            << testFile(u"mymodule-build-without-qmldir-prefer/MyModule/X/Y/Z/MyComponent.qml"_s)
+            << testFile(u"mymodule-source/MyModule/X/Y/Z/MyComponent.qml"_s);
+
+    // The alias in the qrc may rename the file: the build path has to follow the alias instead of
+    // reusing the file name of the source file.
+    QTest::addRow("RenamedInRcc")
+            << testFile(u"mymodule-build-renamed-in-rcc"_s)
+            << testFile(u"mymodule-build-renamed-in-rcc/MyModule/Renamed.qml"_s)
+            << testFile(u"mymodule-source/MyModule/Main.qml"_s);
+    QTest::addRow("NestedRenamedInRcc")
+            << testFile(u"mymodule-build-renamed-in-rcc"_s)
+            << testFile(u"mymodule-build-renamed-in-rcc/MyModule/X/Y/Z/RenamedComponent.qml"_s)
+            << testFile(u"mymodule-source/MyModule/X/Y/Z/MyComponent.qml"_s);
+}
+
+void tst_qqmljsutils::qmlFileSourcePathFromBuildPath()
+{
+    QFETCH(QString, buildFolder);
+    QFETCH(QString, buildFile);
+    QFETCH(QString, expectedSourceFile);
+
+    QQmlJSResourceFileMapper mapper(
+            QQmlJSUtils::resourceFilesFromBuildFolders(QStringList{ buildFolder }));
+
+    QCOMPARE(QQmlJSUtils::qmlSourcePathFromBuildPath(&mapper, buildFile), expectedSourceFile);
+    QCOMPARE(QQmlJSUtils::qmlBuildPathFromSourcePath(&mapper, expectedSourceFile), buildFile);
+
+    // qmllint passes the file's path as given on its command line. Relative to the build folder,
+    // so that it is relative on any drive.
+    const QString currentPath = QDir::currentPath();
+    const auto restore = qScopeGuard([&]() { QDir::setCurrent(currentPath); });
+    QVERIFY(QDir::setCurrent(buildFolder));
+    const QString relativeBuildFile = QDir(buildFolder).relativeFilePath(buildFile);
+    QVERIFY(QDir::isRelativePath(relativeBuildFile));
+    QCOMPARE(QQmlJSUtils::qmlSourcePathFromBuildPath(&mapper, relativeBuildFile),
+             expectedSourceFile);
+}
+
+void tst_qqmljsutils::qmlBuildPathFromSourcePathWithMultipleRegistrations()
+{
+    // The mapper is constructed directly (rather than via resourceFilesFromBuildFolders)
+    // to control the qrc file order: testdata_builtin.qrc must come first to reproduce
+    // the scenario where a source file is registered in multiple qrc files with
+    // different resource path prefixes.
+    QQmlJSResourceFileMapper mapper({
+        testFile(u"mymodule-build-builtin-testdata/.qt/rcc/testdata_builtin.qrc"_s),
+        testFile(u"mymodule-build-builtin-testdata/.qt/rcc/raw_qml_0.qrc"_s),
+        testFile(u"mymodule-build-builtin-testdata/.qt/rcc/qmake_app.qrc"_s),
+    });
+
+    const QString sourceFile = testFile(u"mymodule-source/MyModule/Main.qml"_s);
+    const QString expectedBuildPath =
+            testFile(u"mymodule-build-builtin-testdata/MyModule/Main.qml"_s);
+
+    QCOMPARE(QQmlJSUtils::qmlBuildPathFromSourcePath(&mapper, sourceFile), expectedBuildPath);
+}
+
+QTEST_MAIN(tst_qqmljsutils)

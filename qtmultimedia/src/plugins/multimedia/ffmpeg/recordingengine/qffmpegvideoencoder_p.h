@@ -1,0 +1,87 @@
+// Copyright (C) 2024 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+#ifndef QFFMPEGVIDEOENCODER_P_H
+#define QFFMPEGVIDEOENCODER_P_H
+
+//
+//  W A R N I N G
+//  -------------
+//
+// This file is not part of the Qt API. It exists purely as an
+// implementation detail. This header file may change from version to
+// version without notice, or even be removed.
+//
+// We mean it.
+//
+
+#include <QtFFmpegMediaPluginImpl/private/qffmpegencoderthread_p.h>
+#include <QtFFmpegMediaPluginImpl/private/qffmpeg_p.h>
+#include <QtFFmpegMediaPluginImpl/private/qffmpegvideoframeencoder_p.h>
+#include <QtFFmpegMediaPluginImpl/private/qffmpegframerateadapter_p.h>
+#include <qvideoframe.h>
+#include <queue>
+
+QT_BEGIN_NAMESPACE
+
+class QVideoFrameFormat;
+class QMediaEncoderSettings;
+
+namespace QFFmpeg {
+class VideoFrameEncoder;
+
+class VideoEncoder : public EncoderThread
+{
+public:
+    VideoEncoder(RecordingEngine &recordingEngine, const QMediaEncoderSettings &settings,
+                 const QVideoFrameFormat &format, std::optional<AVPixelFormat> hwFormat);
+    ~VideoEncoder() override;
+
+    void addFrame(const QVideoFrame &frame);
+
+protected:
+    bool checkIfCanPushFrame() const override;
+
+private:
+    FrameInfo dequeueAdaptedFrame();
+    void retrievePackets();
+
+    [[nodiscard]] bool tryPushToInputQueue(const QVideoFrame &frame);
+    void saturateEncoderQueue();
+    void flushAdapter();
+
+    bool init() override;
+    void cleanup() override;
+    bool hasData() const override;
+    void processOne() override;
+    void handlePausedChanged(bool paused) override;
+
+    std::pair<qint64, qint64> frameTimeStamps(const QVideoFrame &frame) const;
+
+    QMediaEncoderSettings m_settings;
+    VideoFrameEncoder::SourceParams m_sourceParams;
+
+    struct InputFrame
+    {
+        QVideoFrame frame;
+        bool restartTimeBase = false;
+    };
+    std::queue<InputFrame> m_inputQueue;
+    // Max queue size arbitrarily chosen to limit memory usage (332 MB @ 4K when including one
+    // adapted frame in encoder queue)
+    const size_t m_maxQueueSize = 9;
+    std::queue<FrameInfo> m_encoderQueue;
+
+    VideoFrameEncoderUPtr m_frameEncoder;
+    qint64 m_baseTime = 0;
+    bool m_shouldAdjustTimeBaseForNextFrame = true;
+    qint64 m_lastFrameTime = 0;
+
+    std::optional<qreal> m_fixedSourceFrameRate; // nullopt = variable-rate source
+    FrameRateAdapter m_frameRateAdapter;
+};
+
+} // namespace QFFmpeg
+
+QT_END_NAMESPACE
+
+#endif

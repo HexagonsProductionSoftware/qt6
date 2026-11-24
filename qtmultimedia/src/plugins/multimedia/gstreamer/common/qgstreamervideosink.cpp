@@ -1,0 +1,466 @@
+// Copyright (C) 2016 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+
+#include <common/qgstreamervideosink_p.h>
+#include <common/qgstvideorenderersink_p.h>
+#include <common/qgst_debug_p.h>
+#include <common/qgstutils_p.h>
+#include <rhi/qrhi.h>
+
+#include <QtCore/qdebug.h>
+#include <QtCore/qloggingcategory.h>
+
+#include <optional>
+#include <variant>
+
+#if QT_CONFIG(gstreamer_gl)
+#  include <QtGui/qguiapplication.h>
+#  include <QtGui/qguiapplication_platform.h>
+#  include <QtGui/qopenglcontext.h>
+#  include <QtGui/qwindow.h>
+#  include <gst/gl/gstglconfig.h>
+#  include <gst/gl/gstgldisplay.h>
+
+#  if QT_CONFIG(gstreamer_gl_x11)
+#    include <gst/gl/x11/gstgldisplay_x11.h>
+#  endif
+#  if QT_CONFIG(gstreamer_gl_egl)
+#    include <common/qgstreameregldisplay_p.h>
+#    include <QtMultimedia/private/qeglimagefunctions_p.h>
+#    include <QtMultimedia/private/qmultimedia_gl_support_p.h>
+#    include <gst/gl/egl/gstgldisplay_egl.h>
+#    include <EGL/egl.h>
+#    include <EGL/eglext.h>
+#  endif
+#  if QT_CONFIG(gstreamer_gl_wayland)
+#    include <gst/gl/wayland/gstgldisplay_wayland.h>
+#  endif
+#endif // #if QT_CONFIG(gstreamer_gl)
+
+QT_BEGIN_NAMESPACE
+
+Q_STATIC_LOGGING_CATEGORY(qLcGstVideoSink, "qt.multimedia.gstvideosink");
+
+QGstreamerPluggableVideoSink::QGstreamerPluggableVideoSink(QVideoSink *parent)
+    : QPlatformVideoSink{ parent }
+{
+}
+
+void QGstreamerPluggableVideoSink::setRhi(QRhi *rhi)
+{
+    if (m_rhi == rhi)
+        return;
+
+    m_rhi = rhi;
+    Q_EMIT rhiChanged();
+}
+
+QRhi* QGstreamerPluggableVideoSink::rhi() const
+{
+    return m_rhi;
+}
+
+QGstreamerRelayVideoSink::QGstreamerRelayVideoSink(QObject *parent)
+    : QObject{
+          parent,
+      },
+      m_sinkBin{
+          QGstBin::create("videoSinkBin"),
+      }
+{
+    // This is a hack for some iMX and NVidia platforms. These require the use of a special video
+    // conversion element in the pipeline before the video sink, as they unfortunately
+    // output some proprietary format from the decoder even though it's sometimes marked as
+    // a regular supported video/x-raw format.
+    //
+    // To fix this, simply insert the element into the pipeline if it's available. Otherwise
+    // we simply use an identity element.
+    QGstElementFactoryHandle factory;
+
+    // QT_GSTREAMER_OVERRIDE_VIDEO_CONVERSION_ELEMENT allows users to override the
+    // conversion element. Ideally we construct the element programatically, though.
+    QByteArray preprocessOverride = qgetenv("QT_GSTREAMER_OVERRIDE_VIDEO_CONVERSION_ELEMENT");
+    if (!preprocessOverride.isEmpty()) {
+        qCDebug(qLcGstVideoSink) << "requesting conversion element from environment:"
+                                 << preprocessOverride;
+
+        m_gstPreprocess = QGstBin::createFromPipelineDescription(preprocessOverride, nullptr,
+                                                                 /*ghostUnlinkedPads=*/true);
+        if (!m_gstPreprocess)
+            qCWarning(qLcGstVideoSink) << "Cannot create conversion element:" << preprocessOverride;
+    }
+
+    if (!m_gstPreprocess) {
+        // This is a hack for some iMX and NVidia platforms. These require the use of a special
+        // video conversion element in the pipeline before the video sink, as they unfortunately
+        // output some proprietary format from the decoder even though it's sometimes marked as
+        // a regular supported video/x-raw format.
+        static constexpr auto decodersToTest = {
+            "imxvideoconvert_g2d",
+            "nvvidconv",
+        };
+
+        for (const char *decoder : decodersToTest) {
+            factory = QGstElement::findFactory(decoder);
+            if (factory)
+                break;
+        }
+
+        if (factory) {
+            qCDebug(qLcGstVideoSink)
+                    << "instantiating conversion element:"
+                    << g_type_name(gst_element_factory_get_element_type(factory.get()));
+
+            m_gstPreprocess = QGstElement::createFromFactory(factory, "preprocess");
+        }
+    }
+
+    bool disablePixelAspectRatio =
+            qEnvironmentVariableIntValue("QT_GSTREAMER_DISABLE_PIXEL_ASPECT_RATIO") != 0;
+    if (disablePixelAspectRatio) {
+        // Enabling the pixel aspect ratio may expose a gstreamer bug on cameras that don't expose a
+        // pixel-aspect-ratio via `VIDIOC_CROPCAP`. This can cause the caps negotiation to fail.
+        // Using the QT_GSTREAMER_DISABLE_PIXEL_ASPECT_RATIO environment variable, one can disable
+        // pixel-aspect-ratio handling
+        //
+        // compare: https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/6242
+        m_gstCapsFilter =
+                QGstElement::createFromFactory("identity", "nullPixelAspectRatioCapsFilter");
+    } else {
+        m_gstCapsFilter =
+                QGstElement::createFromFactory("capsfilter", "pixelAspectRatioCapsFilter");
+        QGstCaps capsFilterCaps{
+            gst_caps_new_simple("video/x-raw", "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1, NULL),
+            QGstCaps::HasRef,
+        };
+        g_object_set(m_gstCapsFilter.element(), "caps", capsFilterCaps.caps(), NULL);
+    }
+
+    if (m_gstPreprocess) {
+        m_sinkBin.add(m_gstPreprocess, m_gstCapsFilter);
+        qLinkGstElements(m_gstPreprocess, m_gstCapsFilter);
+        m_sinkBin.addGhostPad(m_gstPreprocess, "sink");
+    } else {
+        m_sinkBin.add(m_gstCapsFilter);
+        m_sinkBin.addGhostPad(m_gstCapsFilter, "sink");
+    }
+
+    updateGstContexts();
+}
+
+QGstreamerRelayVideoSink::~QGstreamerRelayVideoSink()
+{
+    Q_EMIT aboutToBeDestroyed();
+
+    unrefGstContexts();
+}
+
+QGstElement QGstreamerRelayVideoSink::gstSink()
+{
+    if (!m_gstVideoSink) {
+        if (!m_gstQtSink)
+            createQtSink();
+
+        updateSinkElement(m_gstQtSink);
+    }
+
+    return m_sinkBin;
+}
+
+void QGstreamerRelayVideoSink::setActive(bool isActive)
+{
+    if (m_isActive == isActive)
+        return;
+    m_isActive = isActive;
+
+    if (m_gstQtSink)
+        m_gstQtSink.setActive(isActive);
+}
+
+void QGstreamerRelayVideoSink::setAsync(bool isAsync)
+{
+    m_sinkIsAsync = isAsync;
+}
+
+void QGstreamerRelayVideoSink::connectPluggableVideoSink(QGstreamerPluggableVideoSink *pluggableSink)
+{
+    Q_ASSERT(pluggableSink);
+    m_pluggableVideoSink = pluggableSink;
+    m_pluggableVideoSink->setVideoFrame(m_currentVideoFrame);
+    m_pluggableVideoSink->setSubtitleText(m_currentSubtitleText);
+    m_pluggableVideoSink->setNativeSize(m_currentNativeSize);
+    connect(this, &QGstreamerRelayVideoSink::videoFrameChanged,
+            m_pluggableVideoSink, &QPlatformVideoSink::setVideoFrame);
+    connect(this, &QGstreamerRelayVideoSink::subtitleTextChanged,
+            m_pluggableVideoSink, &QPlatformVideoSink::setSubtitleText);
+    connect(this, &QGstreamerRelayVideoSink::nativeSizeChanged,
+            m_pluggableVideoSink, &QPlatformVideoSink::setNativeSize);
+
+    // Update pipeline contexts using the rendering rhi
+    renderingRhiChanged(m_pluggableVideoSink->rhi());
+    m_rhiConnection = connect(m_pluggableVideoSink, &QPlatformVideoSink::rhiChanged, this, [this](){
+        renderingRhiChanged(m_pluggableVideoSink->rhi());
+    });
+}
+
+void QGstreamerRelayVideoSink::disconnectPluggableVideoSink()
+{
+    if (m_pluggableVideoSink) {
+        disconnect(this, &QGstreamerRelayVideoSink::videoFrameChanged,
+                   m_pluggableVideoSink, &QPlatformVideoSink::setVideoFrame);
+        disconnect(this, &QGstreamerRelayVideoSink::subtitleTextChanged,
+                   m_pluggableVideoSink, &QPlatformVideoSink::setSubtitleText);
+        disconnect(this, &QGstreamerRelayVideoSink::nativeSizeChanged,
+                   m_pluggableVideoSink, &QPlatformVideoSink::setNativeSize);
+        disconnect(m_rhiConnection);
+        m_pluggableVideoSink = nullptr;
+    }
+}
+
+void QGstreamerRelayVideoSink::setVideoFrame(const QVideoFrame &frame)
+{
+    Q_EMIT videoFrameChanged(frame);
+    m_currentVideoFrame = frame;
+}
+
+void QGstreamerRelayVideoSink::setSubtitleText(const QString &subtitleText)
+{
+    Q_EMIT subtitleTextChanged(subtitleText);
+    m_currentSubtitleText = subtitleText;
+}
+
+void QGstreamerRelayVideoSink::setNativeSize(QSize size)
+{
+    Q_EMIT nativeSizeChanged(size);
+    m_currentNativeSize = size;
+}
+
+void QGstreamerRelayVideoSink::createQtSink()
+{
+    Q_ASSERT(!m_gstQtSink);
+
+    m_gstQtSink = QGstVideoRendererSink::createSink(this);
+    if (!m_sinkIsAsync)
+        m_gstQtSink.set("async", false);
+    m_gstQtSink.setActive(m_isActive);
+}
+
+void QGstreamerRelayVideoSink::updateSinkElement(QGstVideoRendererSinkElement newSink)
+{
+    if (newSink == m_gstVideoSink)
+        return;
+
+    m_gstCapsFilter.src().modifyPipelineInIdleProbe([&] {
+        if (m_gstVideoSink)
+            m_sinkBin.stopAndRemoveElements(m_gstVideoSink);
+
+        m_gstVideoSink = std::move(newSink);
+        m_sinkBin.add(m_gstVideoSink);
+        qLinkGstElements(m_gstCapsFilter, m_gstVideoSink);
+        GstEvent *event = gst_event_new_reconfigure();
+        gst_element_send_event(m_gstVideoSink.element(), event);
+        m_gstVideoSink.syncStateWithParent();
+    });
+
+    m_sinkBin.dumpPipelineGraph("updateSinkElement");
+}
+
+void QGstreamerRelayVideoSink::unrefGstContexts()
+{
+    m_gstGlDisplayContext.reset();
+    m_gstGlLocalContext.reset();
+}
+
+#if QT_CONFIG(gstreamer_gl)
+
+namespace {
+
+using AnyNativeGLContextType = std::variant<
+#  if QT_CONFIG(gstreamer_gl_egl) && QT_CONFIG(gstreamer_gl_x11) && QT_CONFIG(xcb_glx_plugin)
+        EGLContext, GLXContext
+#  elif QT_CONFIG(gstreamer_gl_egl)
+        EGLContext
+#  elif QT_CONFIG(gstreamer_gl_x11) && QT_CONFIG(xcb_glx_plugin)
+        GLXContext
+#  else
+        void *
+#  endif
+        >;
+
+std::optional<AnyNativeGLContextType>
+resolveNativeGlContext([[maybe_unused]] QOpenGLContext *glContext, GstGLPlatform glPlatform)
+{
+    switch (glPlatform) {
+#  if QT_CONFIG(gstreamer_gl_egl)
+    case GST_GL_PLATFORM_EGL:
+        if (auto *eglContext = glContext->nativeInterface<QNativeInterface::QEGLContext>())
+            return eglContext->nativeContext();
+        return std::nullopt;
+#    endif
+#  if QT_CONFIG(gstreamer_gl_x11) && QT_CONFIG(xcb_glx_plugin)
+    case GST_GL_PLATFORM_GLX:
+        if (auto *glxContext = glContext->nativeInterface<QNativeInterface::QGLXContext>())
+            return glxContext->nativeContext();
+        return std::nullopt;
+#  endif
+    default:
+        return std::nullopt;
+    }
+}
+
+struct ResolveGstGlDisplayResult
+{
+    QGstGLDisplayHandle display;
+    GstGLPlatform platform;
+};
+
+std::optional<ResolveGstGlDisplayResult> resolveGstGlDisplay([[maybe_unused]] QRhi &rhi)
+{
+    // use the egl display if we have one
+#  if QT_CONFIG(gstreamer_gl_egl)
+    if (EGLDisplay eglDisplay = QtMultimediaPrivate::resolveEglDisplay(rhi)) {
+        QGstGLDisplayHandle gstGlDisplay{
+            GST_GL_DISPLAY_CAST(gst_gl_display_egl_new_with_egl_display(eglDisplay)),
+            QGstGLDisplayHandle::HasRef,
+        };
+        if (gstGlDisplay)
+            return ResolveGstGlDisplayResult{
+                std::move(gstGlDisplay),
+                GST_GL_PLATFORM_EGL,
+            };
+    }
+#    endif
+
+#  if QT_CONFIG(gstreamer_gl_wayland)
+    if (auto *waylandApp = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>()) {
+        QGstGLDisplayHandle gstGlDisplay{
+            GST_GL_DISPLAY_CAST(gst_gl_display_wayland_new_with_display(waylandApp->display())),
+            QGstGLDisplayHandle::HasRef,
+        };
+        if (gstGlDisplay)
+            return ResolveGstGlDisplayResult{
+                std::move(gstGlDisplay),
+                GST_GL_PLATFORM_EGL,
+            };
+    }
+#  endif
+
+#  if QT_CONFIG(gstreamer_gl_x11) && QT_CONFIG(xcb_glx_plugin)
+    if (auto *x11App = qGuiApp->nativeInterface<QNativeInterface::QX11Application>()) {
+        QGstGLDisplayHandle gstGlDisplay{
+            GST_GL_DISPLAY_CAST(gst_gl_display_x11_new_with_display(x11App->display())),
+            QGstGLDisplayHandle::HasRef,
+        };
+        if (gstGlDisplay)
+            return ResolveGstGlDisplayResult{
+                std::move(gstGlDisplay),
+                GST_GL_PLATFORM_GLX,
+            };
+    }
+#  endif
+
+    return std::nullopt;
+}
+
+QGstGLContextHandle resolveGstGLContextHandle(const QGstGLDisplayHandle &gstGlDisplay,
+                                              AnyNativeGLContextType nativeContext,
+                                              GstGLPlatform glPlatform)
+{
+    GstGLAPI glApi = QOpenGLContext::openGLModuleType() == QOpenGLContext::LibGL ? GST_GL_API_OPENGL
+                                                                                 : GST_GL_API_GLES2;
+
+    guintptr nativeContextArgument = std::visit([](auto nativeContext) {
+        return guintptr(nativeContext);
+    }, nativeContext);
+
+    QGstGLContextHandle appContext{
+        gst_gl_context_new_wrapped(gstGlDisplay.get(), nativeContextArgument, glPlatform, glApi),
+        QGstGLContextHandle::HasRef,
+    };
+
+    return appContext;
+}
+
+} // namespace
+
+#  endif // #if QT_CONFIG(gstreamer_gl)
+
+void QGstreamerRelayVideoSink::updateGstContexts()
+{
+    QRhi *currentRhi = rhi();
+
+    unrefGstContexts();
+
+#if QT_CONFIG(gstreamer_gl)
+    if (!currentRhi || currentRhi->backend() != QRhi::OpenGLES2)
+        return;
+    QOpenGLContext *glContext =
+            static_cast<const QRhiGles2NativeHandles *>(currentRhi->nativeHandles())->context;
+    Q_ASSERT(glContext);
+
+    std::optional resolvedDisplay = resolveGstGlDisplay(*currentRhi);
+    if (!resolvedDisplay) {
+        qWarning() << "Could not resolve GstGLDisplay";
+        return;
+    }
+
+    std::optional nativeContext = resolveNativeGlContext(glContext, resolvedDisplay->platform);
+    if (!nativeContext) {
+        qWarning() << "Could not find native gl context";
+        return;
+    }
+
+    QGstGLContextHandle appContext = resolveGstGLContextHandle(
+            resolvedDisplay->display, *nativeContext, resolvedDisplay->platform);
+    if (!appContext) {
+        qWarning() << "Could not create wrappped context for platform:"
+                   << resolvedDisplay->platform;
+        return;
+    }
+
+    gst_gl_context_activate(appContext.get(), true);
+
+    QUniqueGErrorHandle error;
+    gst_gl_context_fill_info(appContext.get(), &error);
+    if (error) {
+        qWarning() << "Could not fill context info:" << error;
+        error = {};
+    }
+
+    QGstGLContextHandle displayContext;
+    gst_gl_display_create_context(resolvedDisplay->display.get(), appContext.get(), &displayContext,
+                                  &error);
+    if (error)
+        qWarning() << "Could not create display context:" << error;
+
+    appContext.reset();
+
+    m_gstGlDisplayContext = QGstContextHandle{
+        gst_context_new(GST_GL_DISPLAY_CONTEXT_TYPE, false),
+        QGstContextHandle::HasRef,
+    };
+    gst_context_set_gl_display(m_gstGlDisplayContext.get(), resolvedDisplay->display.get());
+
+    m_gstGlLocalContext = QGstContextHandle{
+        gst_context_new("gst.gl.local_context", false),
+        QGstContextHandle::HasRef,
+    };
+
+    GstStructure *structure = gst_context_writable_structure(m_gstGlLocalContext.get());
+    gst_structure_set(structure, "context", GST_TYPE_GL_CONTEXT, displayContext.get(), nullptr);
+    displayContext.reset();
+
+    // Note: after updating the context, we switch the sink and send gst_event_new_reconfigure()
+    // upstream. this will cause the context to be queried again.
+#endif // #if QT_CONFIG(gstreamer_gl)
+}
+
+void QGstreamerRelayVideoSink::renderingRhiChanged(QRhi *rhi)
+{
+    m_rhi = rhi;
+    updateGstContexts();
+}
+
+QT_END_NAMESPACE
+
+#include "moc_qgstreamervideosink_p.cpp"

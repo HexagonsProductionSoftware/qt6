@@ -1,0 +1,36 @@
+// Copyright (C) 2026 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GFDL-1.3-no-invariants-only
+
+/*!
+    \page qtdbus-security.html
+    \title Qt D-Bus Security Considerations
+    \ingroup security-considerations
+    \brief Security considerations for applications using Qt D-Bus.
+
+    This page covers security considerations for applications using
+    \l{Qt D-Bus}.
+
+    \section1 Exporting QObjects directly
+
+    \l{QDBusConnection::registerObject()} can export a \l QObject's own
+    slots directly, by passing \l{QDBusConnection::RegisterOption}
+    {ExportNonScriptableSlots} or \l{QDBusConnection::RegisterOption}
+    {ExportAllSlots}. Doing so makes all of that object's invocables
+    accessible remotely, including those inherited from any superclass,
+    not only the ones declared on the object's own class. Only
+    \l QObject's own built-in slots (such as \l{QObject::deleteLater()}
+    {deleteLater()}) are excluded.
+
+    If you need precise, explicit control over which methods are
+    bus-callable, use the adaptor pattern instead. See
+    \l{Using Qt D-Bus Adaptors} for details.
+
+    \section1 Message validation relies on libdbus-1
+
+    Qt D-Bus does not itself validate incoming message size, nesting depth,
+    or type validity. This is delegated to libdbus-1, which rejects
+    malformed messages before Qt D-Bus reads them. Qt D-Bus links against
+    whichever libdbus-1 is installed on the system, not a version it ships
+    or controls, so this validation depends on that system library's
+    version and behavior.
+*/

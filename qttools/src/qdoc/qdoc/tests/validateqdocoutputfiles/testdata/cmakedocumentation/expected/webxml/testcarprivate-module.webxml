@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<WebXML>
+    <document>
+        <module name="TestCarPrivate" href="testcarprivate-module.html" status="active" since="6.6.6" documented="true" cmakecomponent="TestCar" cmaketargetitem="Qt6::TestCarPrivate" qtvariable="testcar-private" seen="true">
+            <description>
+                <generatedlist contents="classesbymodule">
+                    <section>
+                        <heading level="1">Classes</heading>
+                        <table width="100%">
+                            <row>
+                                <item>
+                                    <para>
+                                        <link raw="Engine" href="engine.html" type="class"/>
+                                    </para>
+                                </item>
+                                <item>
+                                    <para>Represents a model of an engine.</para>
+                                </item>
+                            </row>
+                        </table>
+                    </section>
+                </generatedlist>
+            </description>
+        </module>
+    </document>
+</WebXML>

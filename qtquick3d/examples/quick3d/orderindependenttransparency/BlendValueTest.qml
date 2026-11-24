@@ -1,0 +1,130 @@
+// Copyright (C) 2024 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR BSD-3-Clause
+
+pragma ComponentBehavior: Bound
+import QtQuick
+import QtQuick3D
+
+Item {
+    id: mainWindow
+    anchors.fill: parent
+
+    View3D {
+        id: view3D
+        anchors.fill: parent
+        camera: PerspectiveCamera {
+            position: Qt.vector3d(0, 100, 600)
+        }
+
+        environment: SceneEnvironment {
+            clearColor: "#000000"
+            backgroundMode: SceneEnvironment.Color
+            antialiasingMode: AppSettings.antialiasingMode
+            antialiasingQuality: AppSettings.antialiasingQuality
+            oitMethod: method.index
+        }
+
+        Node {
+            id: sceneRoot
+            eulerRotation.y: cameraRotation.sliderValue
+            Texture {
+                id: modelTexture
+                source: "images/qt_logo.png"
+                magFilter: Texture.Nearest
+            }
+            Texture {
+                id: noTexture
+            }
+            Model {
+                id: blackrect
+                source: "#Rectangle"
+                scale: Qt.vector3d(10.0, 10.0, 1)
+                position: Qt.vector3d(0, 0, -250)
+                materials: PrincipledMaterial {
+                    baseColor: "white"
+                    baseColorMap: Texture {
+                        source: "images/tilepattern.png"
+                        magFilter: Texture.Nearest
+                    }
+                    lighting: PrincipledMaterial.NoLighting
+                    opacity: 1
+                }
+            }
+
+            component CircleModel : Model {
+                property alias baseColor: circleMaterial.baseColor
+
+                source: "#Sphere"
+                scale: Qt.vector3d(3.0, 3.0, 0.01)
+                materials: PrincipledMaterial {
+                    id: circleMaterial
+                    lighting: PrincipledMaterial.NoLighting
+                    opacity: 0.5
+                    baseColorMap: textureCheckBox.checked ? modelTexture : noTexture
+                }
+            }
+            CircleModel {
+                position: Qt.vector3d(-50, 50, -200)
+                baseColor: "red"
+            }
+            CircleModel {
+                position: Qt.vector3d(50, 50, -150)
+                baseColor: "green"
+            }
+            CircleModel {
+                position: Qt.vector3d(0, -50, -100)
+                baseColor: "blue"
+            }
+        }
+    }
+
+    SettingsView {
+        id: settingsView
+        CustomLabel {
+            id: methodLabel
+            text: method.selection
+        }
+        CustomSelectionBox {
+            id: method
+            text: "OIT Method"
+            values: ["None", "WeightedBlended", "LinkedList"]
+            parentWidth: settingsView.width
+        }
+        CustomLabel {
+            text: "Camera rotation"
+        }
+        CustomSlider {
+            id: cameraRotation
+            fromValue: -85
+            toValue: 85
+            sliderValue: 0
+        }
+        CustomLabel {
+            text: "Enable texture"
+        }
+        CustomCheckBox {
+            id: textureCheckBox
+            checked: false
+        }
+    }
+    CustomInfoView {
+        width: settingsView.width
+        anchors.top: settingsView.bottom
+        anchors.topMargin: 30
+        x: parent.width - settingsView.width
+        anchors.bottom: parent.bottom
+        visible: AppSettings.showSettingsView
+        selection: method.index
+
+        titles: [
+            "OIT Disabled",
+            "Weighted blended",
+            "Linked List"
+        ]
+        contents: [
+            "When order independent transparency\nis disabled, the drawing order is deter-\nmined by the center or the object.\nWhen rotating the camera, drawing\norder will change.",
+            "When order independent transparency\nis enabled, the drawing order doesn't\naffect the render result anymore.\nInstead it is only affected by the\nz-coordinate of the pixel. Weighted\nblended method doesn't use the porter-\nduff source over blending so the\nblending results are different.",
+            "When using Linked list method, the\nrendered fragments are placed in\na linked list. In the second pass\nthey are sorted and rendered in the correct order."
+        ]
+    }
+}

@@ -1,0 +1,19 @@
+<RCC>
+    <qresource prefix="/qt/qml/system">
+        <file>LauncherList.qml</file>
+        <file>SimpleLauncherDelegate.qml</file>
+        <file>images/back.png</file>
+        <file>images/back@2x.png</file>
+        <file>images/back@3x.png</file>
+        <file>images/back@4x.png</file>
+        <file>system.qml</file>
+        <file>dynamiccomparison.qml</file>
+        <file>dynamicemitters.qml</file>
+        <file>multiplepainters.qml</file>
+        <file>startstop.qml</file>
+        <file>timedgroupchanges.qml</file>
+        <file>images/sparkleSize.png</file>
+        <file>images/particle2.png</file>
+        <file>images/particle3.png</file>
+    </qresource>
+</RCC>

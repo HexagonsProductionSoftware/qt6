@@ -1,0 +1,32 @@
+# Copyright (C) 2022 The Qt Company Ltd.
+# SPDX-License-Identifier: BSD-3-Clause
+
+#####################################################################
+## tst_qdecompresshelper Test:
+#####################################################################
+
+if(NOT QT_BUILD_STANDALONE_TESTS AND NOT QT_BUILDING_QT)
+    cmake_minimum_required(VERSION 3.16)
+    project(tst_qdecompresshelper LANGUAGES CXX)
+    find_package(Qt6BuildInternals REQUIRED COMPONENTS STANDALONE_TEST)
+endif()
+
+qt_internal_add_test(tst_qdecompresshelper
+    SOURCES
+        gzip.rcc.cpp
+        inflate.rcc.cpp
+        tst_qdecompresshelper.cpp
+        zstandard.rcc.cpp
+    LIBRARIES
+        Qt::NetworkPrivate
+)
+
+qt_internal_add_resource(tst_qdecompresshelper "tst_qdecompresshelper_testdata"
+    PREFIX
+        "/"
+    BASE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+    FILES
+        10K.gz
+        4G.br
+)

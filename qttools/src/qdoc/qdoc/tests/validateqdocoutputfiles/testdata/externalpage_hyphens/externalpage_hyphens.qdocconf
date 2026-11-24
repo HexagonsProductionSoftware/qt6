@@ -1,0 +1,30 @@
+project = External Page Hyphens
+productname = Qt
+
+moduleheader =
+headerdirs  = ./src
+sourcedirs  = ./src
+includepaths = ./src
+
+# To begin with, just test HTML to avoid too many expected output file
+outputformats = HTML
+HTML.nosubdirs = true
+
+HTML.outputsubdir = html
+
+headers.fileextensions  = "*.h *.hpp"
+sources.fileextensions  = "*.cpp *.qml *.qdoc"
+
+# capture warnings for validation
+projectroot = .
+logwarnings = true
+logwarnings.disablecliargs = true
+
+# allow two warnings:
+# Can't link to '-RFC 6749'
+# Can't link to ''
+warninglimit = 2
+warninglimit.enabled = true
+
+# don't write host system-specific paths to index files
+locationinfo = false

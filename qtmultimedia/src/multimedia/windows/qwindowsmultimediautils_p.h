@@ -1,0 +1,61 @@
+// Copyright (C) 2021 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+
+#ifndef QWINDOWSMULTIMEDIATUTILS_P_H
+#define QWINDOWSMULTIMEDIATUTILS_P_H
+
+//
+//  W A R N I N G
+//  -------------
+//
+// This file is not part of the Qt API. It exists purely as an
+// implementation detail. This header file may change from version to
+// version without notice, or even be removed.
+//
+// We mean it.
+//
+
+#include <QtMultimedia/qmediaformat.h>
+#include <QtMultimedia/qvideoframeformat.h>
+#include <QtMultimedia/private/qtmultimediaglobal_p.h>
+
+#include <guiddef.h>
+
+#include <optional>
+
+struct IMFMediaType;
+
+QT_BEGIN_NAMESPACE
+
+class QCameraFormat;
+
+namespace QWMF {
+
+Q_MULTIMEDIA_EXPORT QVideoFrameFormat::PixelFormat pixelFormatFromMediaSubtype(const GUID &subtype);
+
+[[nodiscard]] Q_MULTIMEDIA_EXPORT std::optional<QCameraFormat>
+cameraFormatFromMediaType(IMFMediaType *mediaFormat);
+
+[[nodiscard]] Q_MULTIMEDIA_EXPORT QVideoFrameFormat::ColorRange
+colorRangeFromNominalRange(uint32_t nominalRange);
+
+[[nodiscard]] Q_MULTIMEDIA_EXPORT QVideoFrameFormat::ColorSpace
+colorSpaceFromMatrix(uint32_t yuvMatrix);
+
+Q_MULTIMEDIA_EXPORT GUID videoFormatForCodec(QMediaFormat::VideoCodec codec);
+Q_MULTIMEDIA_EXPORT QMediaFormat::VideoCodec codecForVideoFormat(GUID format);
+
+Q_MULTIMEDIA_EXPORT GUID audioFormatForCodec(QMediaFormat::AudioCodec codec);
+Q_MULTIMEDIA_EXPORT QMediaFormat::AudioCodec codecForAudioFormat(GUID format);
+
+[[nodiscard]] Q_MULTIMEDIA_EXPORT std::optional<GUID>
+containerForVideoFileFormat(QMediaFormat::FileFormat format);
+
+[[nodiscard]] Q_MULTIMEDIA_EXPORT std::optional<GUID>
+containerForAudioFileFormat(QMediaFormat::FileFormat format);
+
+} // namespace QWMF
+
+QT_END_NAMESPACE
+
+#endif

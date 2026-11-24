@@ -1,0 +1,60 @@
+#QTBUG-112827 on Android
+#QTBUG-111190, v4l2m2m issues
+[recorder_encodesFrames_toValidMediaFile]
+android ci
+
+#QTBUG-112827 on Android
+#QTBUG-111190, v4l2m2m issues
+[recorder_encodesFrames_toValidMediaFile_whenWindowResizes]
+android ci
+
+
+# QTBUG-135601 on Windows 11 24h2
+[capturedImage_changes_whenWindowContentChanges]
+windows-11 msvc ci
+[sequenceOfCapturedImages_compareEqual_whenWindowContentIsUnchanged]
+windows-11 msvc ci
+[recorder_encodesFrames_toValidMediaFile_whenWindowResizes]
+windows-11 msvc ci
+
+# Flaky on Windows CI machines
+[capturedFrame_hasExpectedSize]
+windows ci
+
+# Windows WGC implementation has issues with resizing
+[capturedFrame_hasNewSize_whenWindowResized]
+windows
+
+# Linux and Windows implementations hace issues with
+# presentation timings
+[setFrameRate_emitsFramesWithExpectedPresentationTimeSpacing]
+windows
+linux
+
+# BUG: Switching window while recording restarts presentation times at zero,
+# and the recorder discards frames older than what it has already encoded.
+[recorder_recordingHasExpectedDuration_whenWindowIsSwitched]
+windows
+linux
+
+[recorder_doesNotAutoStop_whenWindowIsSwitched]
+xcb
+
+[stream_endsWithNullFrame_whenStopped]
+windows
+linux
+[stream_endsWithNullFrame_whenDestroyed]
+windows
+linux
+[stream_endsWithNullFrame_whenRestarted]
+windows
+linux
+
+[recorder_autoStops_whenWindowCaptureIsDestroyed]
+windows
+linux
+
+# BUG: Removing a video source from the capture session does not report
+# end-of-stream to the recorder (see TODO in connectEncoderToSource).
+[recorder_autoStops_whenWindowCaptureIsRemovedFromCaptureSession]
+*

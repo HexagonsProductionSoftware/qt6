@@ -1,0 +1,154 @@
+// Copyright (C) 2025 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+
+#include "qohosplatformservices.h"
+#include <QtCore/private/qcore_ohos_p.h>
+#include <QtCore/qurl.h>
+#include <QtCore/private/qnapi_p.h>
+#include <QtCore/private/qohoscommon_p.h>
+#include <QtCore/private/qohospathutils_p.h>
+#include <QtCore/qfileinfo.h>
+#include <QtGui/qcolor.h>
+#include <qohosqpaenums.h>
+
+QT_BEGIN_NAMESPACE
+
+using QOhosWantConstantFlags = QtOhosQpa::enums::ohos::app::ability::wantConstant::Flags;
+
+namespace {
+
+void callStartAbility(QNapi::Object baseQAbility, QNapi::Object want, QOhosTaskPromise<bool> resultPromise)
+{
+    qOhosPrintfDebug("Calling startAbility() with Want '%s'", QNapi::toJsonString(want).c_str());
+
+    auto thenCatchPromises = std::move(resultPromise).makeThenCatchBranches(Q_FUNC_INFO);
+    baseQAbility.evalToPromiseOrRejectOnThrow("context.startAbility(*)", {want})
+    .onThen(
+        [thenPromise = std::move(thenCatchPromises.first)](const QOhosCallbackInfo &) {
+            qOhosPrintfDebug("Got success from startAbility()");
+            thenPromise(true);
+        })
+    .onCatch(
+        [catchPromise = std::move(thenCatchPromises.second)](const QOhosCallbackInfo &cbInfo) {
+            QtOhos::logJsCallbackError(cbInfo, "Got error from startAbility()");
+            catchPromise(false);
+        });
+}
+
+class QOhosColorPicker : public QPlatformServiceColorPicker
+{
+public:
+    QOhosColorPicker();
+
+    void pickColor() override;
+};
+
+QOhosColorPicker::QOhosColorPicker() = default;
+
+void QOhosColorPicker::pickColor()
+{
+    auto selfRef = QtOhos::makeQThreadSafeRef(this);
+    QOhosJsThreadGateway::invoke(
+        [selfRef](QOhosJsState &jsState) {
+            jsState.evalToPromiseOrRejectOnThrow("@kit.Penkit.imageFeaturePicker.pickForResult()")
+            .onThen(
+                [selfRef](const QOhosCallbackInfo &cbInfo) {
+                    auto pickedColorInfo = cbInfo.getFirstArg<QNapi::Object>(Q_FUNC_INFO);
+                    auto color = pickedColorInfo.get<QNapi::Object>("color");
+                    QColor qColor(
+                        color.get<QNapi::Number>("red"),
+                        color.get<QNapi::Number>("green"),
+                        color.get<QNapi::Number>("blue"),
+                        color.get<QNapi::Number>("alpha"));
+                    selfRef.visitInQtThreadIfAlive(
+                        [qColor](QOhosColorPicker &self) {
+                            Q_EMIT self.colorPicked(qColor);
+                        });
+                })
+            .onCatch(
+                [](const QOhosCallbackInfo &cbInfo) {
+                    QtOhos::logJsCallbackError(cbInfo, "@kit.Penkit.imageFeaturePicker.pickForResult() failed");
+                });
+        });
+}
+} // namespace
+
+QOhosPlatformServices::QOhosPlatformServices() = default;
+
+QPlatformServiceColorPicker *QOhosPlatformServices::colorPicker(QWindow *parent)
+{
+    Q_UNUSED(parent);
+    return new QOhosColorPicker;
+}
+
+bool QOhosPlatformServices::hasCapability(Capability capability) const
+{
+    switch (capability) {
+    case ColorPicking:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool QOhosPlatformServices::openUrl(const QUrl &url)
+{
+    return QOhosJsThreadGateway::evalWithPromise<bool>(
+        [&](QOhosJsState &jsState, QOhosTaskPromise<bool> evalPromise) {
+            auto optMainUiAbility = jsState.defaultQAbility();
+            if (!optMainUiAbility) {
+                evalPromise(false);
+                return;
+            }
+
+            auto want =
+                !url.isLocalFile()
+                    ? QNapi::makeObject(
+                        jsState.env(),
+                        {
+                            {"action", "ohos.want.action.viewData"},
+                            {"entities", QNapi::makeArray(jsState.env(), {"entity.system.browsable"})},
+                            {"uri", url.toString().toStdString()},
+                        })
+                    : QFileInfo(url.path()).isDir()
+                        ? QNapi::makeObject(
+                            jsState.env(),
+                            {
+                                {"abilityName", "MainAbility"},
+                                {"bundleName", "com.huawei.hmos.filemanager"},
+                                {
+                                    "parameters",
+                                    QNapi::makeObject(
+                                        jsState.env(),
+                                        {
+                                            {"fileUri", tryMapPathToOhosFileUri(url.path().toStdString()).value_or("")},
+                                        })
+                                },
+                            })
+                        : QNapi::makeObject(
+                            jsState.env(),
+                            {
+                                {"action", "ohos.want.action.viewData"},
+                                {"uri", tryMapPathToOhosFileUri(url.path().toStdString()).value_or("")},
+                                {
+                                    "flags",
+                                    jsState.mapOhosEnumToJs(QOhosWantConstantFlags::FLAG_AUTH_READ_URI_PERMISSION).Int32Value()
+                                    | jsState.mapOhosEnumToJs(QOhosWantConstantFlags::FLAG_AUTH_WRITE_URI_PERMISSION).Int32Value()
+                                },
+                            });
+            callStartAbility(optMainUiAbility.value(), want, std::move(evalPromise));
+        },
+        Q_FUNC_INFO);
+}
+
+bool QOhosPlatformServices::openDocument(const QUrl &url)
+{
+    return openUrl(url);
+}
+
+QByteArray QOhosPlatformServices::desktopEnvironment() const
+{
+    return QByteArray("Ohos");
+}
+
+QT_END_NAMESPACE

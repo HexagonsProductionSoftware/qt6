@@ -1,0 +1,181 @@
+// Copyright (C) 2016 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+// Qt-Security score:significant reason:default
+
+
+#ifndef QSVGHANDLER_P_H
+#define QSVGHANDLER_P_H
+
+//
+//  W A R N I N G
+//  -------------
+//
+// This file is not part of the Qt API.  It exists purely as an
+// implementation detail.  This header file may change from version to
+// version without notice, or even be removed.
+//
+// We mean it.
+//
+
+#include "QtCore/qxmlstream.h"
+#include "QtCore/qstack.h"
+#include "QtCore/qstringview.h"
+#include <QtCore/QLoggingCategory>
+#include "qsvgstyle_p.h"
+#if QT_CONFIG(cssparser)
+#include <QtSvg/private/qsvgcsshandler_p.h>
+#include <QtSvg/private/qsvgcssproperties_p.h>
+#include <QtSvg/private/qsvgcssvalues_p.h>
+#endif
+#include "qsvggraphics_p.h"
+#include "qsvgfont_p.h"
+#include "qtsvgglobal_p.h"
+#include "qtsvgglobal.h"
+#include <QtSvg/private/qsvgpaintserver_p.h>
+#include <QtGui/private/qguisvg_p.h>
+
+#include <memory>
+
+QT_BEGIN_NAMESPACE
+
+class QSvgNode;
+class QSvgDocument;
+class QSvgHandler;
+class QColor;
+
+Q_AUTOTEST_EXPORT QList<qreal> parseNumbersList(QStringView *str);
+Q_AUTOTEST_EXPORT bool resolveColor(QStringView colorStr, QColor &color, QSvgHandler *handler);
+
+class Q_SVG_EXPORT QSvgHandler
+{
+public:
+    QSvgHandler(QIODevice *device, QtSvg::Options options = {},
+                QtSvg::AnimatorType type = QtSvg::AnimatorType::Automatic);
+    QSvgHandler(const QByteArray &data, QtSvg::Options options = {},
+                QtSvg::AnimatorType type = QtSvg::AnimatorType::Automatic);
+    QSvgHandler(QXmlStreamReader *const data, QtSvg::Options options = {},
+                QtSvg::AnimatorType type = QtSvg::AnimatorType::Automatic);
+    ~QSvgHandler();
+
+    QIODevice *device() const;
+    QSvgDocument *document() const;
+    // resets the stored document: afterwards document() == nullptr and ok() == false
+    [[nodiscard]] std::unique_ptr<QSvgDocument> takeDocument();
+
+    inline bool ok() const {
+        return document() != 0 && !xml->hasError();
+    }
+
+    inline QString errorString() const { return xml->errorString(); }
+    inline int lineNumber() const { return xml->lineNumber(); }
+
+    void setDefaultCoordinateSystem(QGuiSvg::LengthType type);
+    QGuiSvg::LengthType defaultCoordinateSystem() const;
+
+    void pushColor(const QColor &color);
+    void pushColorCopy();
+    void popColor();
+    QColor currentColor() const;
+
+    void pushUnresolvedStyle(QSvgStyleProperty *prop);
+
+    void setCurrentSvgFontFamily(QStringView family);
+
+#ifndef QT_NO_CSSPARSER
+    QSvgCssHandler &cssHandler();
+#endif
+
+    void setAnimPeriod(int start, int end);
+    int animationDuration() const;
+
+    inline QPen defaultPen() const
+    { return m_defaultPen; }
+
+    QtSvg::Options options() const;
+    QtSvg::AnimatorType animatorType() const;
+    bool trustedSourceMode() const;
+
+public:
+    bool startElement(const QString localName, const QXmlStreamAttributes &attributes);
+    bool endElement(const QStringView localName);
+    bool characters(const QStringView str);
+    bool processingInstruction(const QStringView target, const QStringView data);
+    void readStyle();
+
+private:
+    void init();
+
+    std::unique_ptr<QSvgDocument> m_doc;
+    QStack<QSvgNode *> m_nodes;
+    // TODO: This is only needed during parsing, so it unnecessarily takes up space after that.
+    // Temporary container for :
+    // - <use> nodes which haven't been resolved yet.
+    // - <filter> nodes to be checked for unsupported filter primitives.
+    QList<QSvgNode *> m_toBeResolved;
+    QList<QSvgStyleProperty *> m_unresolvedStyles;
+
+    enum CurrentNode
+    {
+        Unknown,
+        Graphics,
+        Style,
+        Doc
+    };
+    QStack<CurrentNode> m_skipNodes;
+
+    /*!
+        Follows the depths of elements. The top is current xml:space
+        value that applies for a given element.
+     */
+    QStack<QSvgText::WhitespaceMode> m_whitespaceMode;
+
+    struct SvgFontData
+    {
+        QSvgFontPtr font;
+        QString fontFamily;
+
+        bool isEmpty() const
+        {
+            return !font || fontFamily.isEmpty();
+        }
+
+        void reset()
+        {
+            font = nullptr;
+            fontFamily.clear();
+        }
+    };
+
+    SvgFontData m_currentSvgFontData;
+    QSvgPaintServerSharedPtr m_paintServer;
+
+    QGuiSvg::LengthType m_defaultCoords{QGuiSvg::LT_PX};
+
+    QStack<QColor> m_colorStack;
+    QStack<int>    m_colorTagCount;
+
+    int m_animEnd{0};
+
+    const std::unique_ptr<QXmlStreamReader> m_reader;
+    QXmlStreamReader *const xml; // either m_reader.get() or provided by user though ctor
+#ifndef QT_NO_CSSPARSER
+    QSvgCssHandler m_cssHandler;
+#endif
+    void parse();
+    void resolvePaintServers();
+    void resolveNodes();
+
+    QPen m_defaultPen;
+    const QtSvg::Options m_options;
+    const QtSvg::AnimatorType m_animatorType;
+};
+
+Q_AUTOTEST_EXPORT QSvgNode *createAnimateTransformNode(QSvgNode *parent,
+                                                       const QXmlStreamAttributes &attributes,
+                                                       QSvgHandler *handler);
+
+Q_DECLARE_LOGGING_CATEGORY(lcSvgHandler)
+
+QT_END_NAMESPACE
+
+#endif // QSVGHANDLER_P_H

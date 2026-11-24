@@ -1,0 +1,16 @@
+type: Group
+enable_if:
+  condition: property
+  property: features
+  contains_value: DarwinNativeMediaBackendTests
+
+instructions:
+  - type: EnvironmentVariable
+    variableName: QT_MEDIA_BACKEND
+    variableValue: darwin
+
+  - type: AppendToEnvironmentVariable
+    variableName: CTEST_ARGS
+    variableValue: " -R tst_qmediaplayerbackend"
+
+  - !include "{{qt/qtbase}}/coin_module_test_template_v3.yaml"

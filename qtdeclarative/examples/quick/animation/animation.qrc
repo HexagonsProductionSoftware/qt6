@@ -1,0 +1,30 @@
+<RCC>
+    <qresource prefix="/qt/qml/animation">
+        <file>LauncherList.qml</file>
+        <file>SimpleLauncherDelegate.qml</file>
+        <file>images/back.png</file>
+        <file>images/back@2x.png</file>
+        <file>images/back@3x.png</file>
+        <file>images/back@4x.png</file>
+        <file>animation.qml</file>
+        <file>basics/images/face-smile.png</file>
+        <file>basics/images/moon.png</file>
+        <file>basics/images/shadow.png</file>
+        <file>basics/images/star.png</file>
+        <file>basics/images/sun.png</file>
+        <file>basics/color-animation.qml</file>
+        <file>basics/property-animation.qml</file>
+        <file>behaviors/behavior-example.qml</file>
+        <file>behaviors/FocusRect.qml</file>
+        <file>behaviors/SideRect.qml</file>
+        <file>behaviors/tvtennis.qml</file>
+        <file>behaviors/wigglytext.qml</file>
+        <file>easing/easing.qml</file>
+        <file>pathanimation/pathanimation.qml</file>
+        <file>pathinterpolator/pathinterpolator.qml</file>
+        <file>states/qt-logo.png</file>
+        <file>states/states.qml</file>
+        <file>states/transitions.qml</file>
+        <file>basics/animators.qml</file>
+    </qresource>
+</RCC>

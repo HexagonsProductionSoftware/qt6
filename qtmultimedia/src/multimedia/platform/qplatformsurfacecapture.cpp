@@ -1,0 +1,131 @@
+// Copyright (C) 2022 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
+
+#include "qplatformsurfacecapture_p.h"
+
+#include <QtMultimedia/qvideoframe.h>
+#include <QtGui/qguiapplication.h>
+#include <QtCore/qdebug.h>
+
+QT_BEGIN_NAMESPACE
+
+QPlatformSurfaceCapture::QPlatformSurfaceCapture(Source initialSource) : m_source(initialSource)
+{
+    Q_ASSERT(std::visit([](const auto &source) {
+        return source == decltype(source){};
+    }, initialSource));
+    qRegisterMetaType<QVideoFrame>();
+}
+
+void QPlatformSurfaceCapture::setActive(bool active)
+{
+    if (m_active == active)
+        return;
+
+    if (!setActiveInternal(active))
+        return;
+
+    m_active = active;
+    Q_EMIT activeChanged(active);
+}
+
+bool QPlatformSurfaceCapture::isActive() const
+{
+    return m_active;
+}
+
+void QPlatformSurfaceCapture::setSource(Source source)
+{
+    Q_ASSERT(source.index() == m_source.index());
+
+    if (m_source == source)
+        return;
+
+    if (!m_active) {
+        m_source = std::move(source);
+    } else if (const std::optional<SourceSwitchResult> result = switchActiveSource(source)) {
+        m_source = std::move(source);
+
+        if (!*result) {
+            setActiveInternal(false);
+            updateError(result->error().error, result->error().description);
+            m_active = false;
+            Q_EMIT activeChanged(false);
+        }
+    } else {
+        // Switching is not supported, so restart the stream with the new source.
+        setActiveInternal(false);
+
+        m_source = std::move(source);
+
+        if (!setActiveInternal(true)) {
+            m_active = false;
+            Q_EMIT activeChanged(false);
+        }
+    }
+
+    std::visit([this](const auto &source) {
+        Q_EMIT sourceChanged(source);
+    }, m_source);
+}
+
+std::optional<QPlatformSurfaceCapture::SourceSwitchResult>
+QPlatformSurfaceCapture::switchActiveSource(const Source &)
+{
+    return std::nullopt;
+}
+
+QPlatformSurfaceCapture::Error QPlatformSurfaceCapture::error() const
+{
+    return m_error.code();
+}
+
+QString QPlatformSurfaceCapture::errorString() const
+{
+    return m_error.description();
+}
+
+void QPlatformSurfaceCapture::setFrameRate(std::optional<qreal> frameRate)
+{
+    if (m_frameRate == frameRate)
+        return;
+
+    m_frameRate = frameRate;
+    Q_EMIT frameRateChanged(m_frameRate);
+}
+
+std::optional<qreal> QPlatformSurfaceCapture::frameRate() const
+{
+    return m_frameRate;
+}
+
+void QPlatformSurfaceCapture::setIgnoreCursor(bool ignore)
+{
+    m_ignoreCursor = ignore;
+}
+
+bool QPlatformSurfaceCapture::ignoreCursor() const
+{
+    return m_ignoreCursor;
+}
+
+void QPlatformSurfaceCapture::updateError(Error error, const QString &errorString)
+{
+    m_error.setAndNotify(error, errorString, *this);
+}
+
+bool QPlatformSurfaceCapture::checkScreenWithError(ScreenSource &screen)
+{
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+
+    if (screen)
+        return true;
+
+    updateError(Error::NotFound, QLatin1String("No screens found"));
+    return false;
+}
+
+QT_END_NAMESPACE
+
+#include "moc_qplatformsurfacecapture_p.cpp"

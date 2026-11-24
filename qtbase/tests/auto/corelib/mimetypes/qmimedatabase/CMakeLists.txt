@@ -1,0 +1,14 @@
+# Copyright (C) 2022 The Qt Company Ltd.
+# SPDX-License-Identifier: BSD-3-Clause
+
+if(TARGET Qt::Concurrent)
+    add_subdirectory(qmimedatabase-xml-builtin)
+    add_subdirectory(qmimedatabase-xml-fdoxml)
+endif()
+if(TARGET Qt::Concurrent AND UNIX AND NOT APPLE AND NOT QNX AND NOT OHOS)
+    add_subdirectory(qmimedatabase-cache-builtin)
+    add_subdirectory(qmimedatabase-cache-fdoxml)
+endif()
+if(UNIX AND NOT ANDROID AND NOT APPLE AND NOT QNX AND NOT OHOS)
+    add_subdirectory(qmimedatabase-malformed)
+endif()

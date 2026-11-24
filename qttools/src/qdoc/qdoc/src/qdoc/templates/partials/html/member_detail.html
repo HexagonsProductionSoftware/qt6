@@ -1,0 +1,49 @@
+{#-
+Copyright (C) 2026 The Qt Company Ltd.
+SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only WITH Qt-GPL-exception-1.0
+-#}
+    {% if existsIn(member, "sharedGroup") and existsIn(section, "sharedGroups") %}
+    {% set shared = at(section.sharedGroups, member.sharedGroup) %}
+    {% if existsIn(shared, "anchorId") and shared.anchorId != "" and shared.firstIndex == loop.index %}
+    <a id="{{ shared.anchorId }}"></a>
+    {% endif %}
+    {% endif %}
+    <h3 class="fn" id="{{ member.anchorId }}">{% if existsIn(member, "signatureSpans") %}{{ render_signature_spans(member.signatureSpans) }}{% else %}{{ escape_html(member.synopsis) }}{% endif %}<a class="plink" href="#{{ member.anchorId }}" title="Direct link to this headline"></a></h3>
+    {% if existsIn(member, "sharedGroup") and existsIn(section, "sharedGroups") %}
+    {% set shared = at(section.sharedGroups, member.sharedGroup) %}
+    {% if shared.firstIndex + shared.count - 1 == loop.index %}
+    {% if shared.status.id == "deprecated" %}
+    <p>{% if shared.isPlural %}These{% else %}This{% endif %}{{ " " }}{{ shared.typeNoun }}{{ " " }}{% if shared.isPlural %}are{% else %}is{% endif %}{{ " " }}deprecated{% if existsIn(shared, "deprecatedSince") %}{{ " " }}since {{ escape_html(shared.deprecatedSinceQualified) }}{% endif %}. We strongly advise against using {% if shared.isPlural %}them{% else %}it{% endif %}{{ " " }}in new code.</p>
+    {% else if shared.status.id == "active" and existsIn(shared, "deprecatedSince") %}
+    <p>{% if shared.isPlural %}These{% else %}This{% endif %}{{ " " }}{{ shared.typeNoun }}{{ " " }}{% if shared.isPlural %}are{% else %}is{% endif %}{{ " " }}scheduled for deprecation in version {{ escape_html(shared.deprecatedSince) }}.</p>
+    {% endif %}
+    {% set blocks = shared.body %}
+    {% include "partials/html/member_body.html" %}
+    {% set also = shared.alsoList %}
+    {% include "partials/html/member_also.html" %}
+    {% endif %}
+    {% else %}
+    {% if member.status.id == "deprecated" %}
+    <p>This {{ member.typeNoun }} is deprecated{% if existsIn(member, "deprecatedSince") %}{{ " " }}since {{ escape_html(member.deprecatedSinceQualified) }}{% endif %}. We strongly advise against using it in new code.</p>
+    {% else if member.status.id == "active" and existsIn(member, "deprecatedSince") %}
+    <p>This {{ member.typeNoun }} is scheduled for deprecation in version {{ escape_html(member.deprecatedSince) }}.</p>
+    {% endif %}
+    {% if existsIn(member, "body") %}{% set blocks = member.body %}{% else %}{% set blocks = [] %}{% endif %}
+    {% include "partials/html/member_body.html" %}
+    {% endif %}
+    {% if existsIn(member, "since") and member.since != "" %}
+    <p>This {{ lower(member.nodeType.label) }} was introduced in Qt {{ escape_html(member.since) }}.</p>
+    {% endif %}
+    {% if existsIn(member, "threadSafety") and member.threadSafety != "" %}
+    <p><b>Note:</b> This function is {{ escape_html(member.threadSafety) }}.</p>
+    {% endif %}
+    {% if existsIn(member, "comparisonCategory") and member.comparisonCategory != "" %}
+    <p><b>Note:</b> Comparison category is {{ escape_html(member.comparisonCategory) }}.</p>
+    {% endif %}
+    {% if existsIn(member, "noexceptNote") and member.noexceptNote != "" %}
+    <p><b>Note:</b> This function is noexcept when {{ escape_html(member.noexceptNote) }}.</p>
+    {% endif %}
+    {% if not (existsIn(member, "sharedGroup") and existsIn(section, "sharedGroups")) %}
+    {% if existsIn(member, "alsoList") %}{% set also = member.alsoList %}{% else %}{% set also = [] %}{% endif %}
+    {% include "partials/html/member_also.html" %}
+    {% endif %}

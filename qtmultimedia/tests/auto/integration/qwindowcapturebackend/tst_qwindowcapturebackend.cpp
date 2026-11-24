@@ -1,0 +1,1763 @@
+// Copyright (C) 2023 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+
+// TESTED_COMPONENT=src/multimedia
+
+#include "tst_qwindowcapturebackend_fixture.h"
+#include "tst_qwindowcapturebackend_widget.h"
+
+#include <QtCore/qcommandlineparser.h>
+#include <QtCore/qelapsedtimer.h>
+#include <QtCore/qoperatingsystemversion.h>
+
+#include <QtGui/qguiapplication.h>
+#include <QtGui/qwindow.h>
+
+#include <QtMultimedia/qmediarecorder.h>
+#include <QtMultimedia/qwindowcapture.h>
+#if defined(Q_OS_MACOS)
+#include <QtMultimedia/private/qavfhelpers_p.h>
+#endif
+#include <QtMultimedia/private/qmultimedia_ranges_p.h>
+#include <QtMultimedia/private/qwindowcapture_p.h>
+#include <QtMultimediaTestLib/private/mediabackendutils_p.h>
+#include <QtMultimediaTestLib/private/mediainfo_p.h>
+#include <QtMultimediaTestLib/private/osdetection_p.h>
+#include <QtMultimediaTestLib/private/qintegrationtestbase_p.h>
+
+#include <QtTest/qsignalspy.h>
+#include <QtTest/qtest.h>
+
+#include <chrono>
+#include <cstdlib>
+#include <tuple>
+#include <vector>
+
+namespace ranges = QtMultimediaPrivate::ranges;
+
+using std::chrono::duration_cast;
+using std::chrono::high_resolution_clock;
+using std::chrono::microseconds;
+using std::chrono::milliseconds;
+
+using QtMultimediaTest::VideoFrameInfo;
+using QtMultimediaTest::surfaceCaptureTestTimeout;
+
+using namespace std::chrono_literals;
+
+using namespace QtMultimediaTest;
+
+class tst_QWindowCaptureBackend : public QIntegrationTestBase
+{
+    Q_OBJECT
+
+private:
+    bool m_skipOddSizedWindows = false;
+    [[nodiscard]] bool skipOddSizedWindows() const { return m_skipOddSizedWindows; }
+
+    // Keeps capturing frames until we receive the size we expect.
+    // If it fails, it emits a QFAIL with a helpful message.
+    void waitForVideoFrameExpectedSize(
+        WindowCaptureFixture &fixture,
+        QSize expectedSize,
+        const QString &context)
+    {
+        bool matched = QTest::qWaitFor(
+            [&] {
+                const std::vector<VideoFrameInfo> &frames = fixture.m_grabber.getFrameInfos();
+                return !frames.empty() && frames.back().size == expectedSize;
+            },
+            surfaceCaptureTestTimeout());
+
+        const std::vector<VideoFrameInfo> &frames = fixture.m_grabber.getFrameInfos();
+        QSize lastFrameSize = frames.empty() ? QSize{} : frames.back().size;
+
+        QVERIFY2(
+            matched,
+            qPrintable(u"%1: expected captured frame %2x%3, but after %4 frame(s) "
+                       "the last one was %5x%6"_s
+                .arg(context)
+                .arg(expectedSize.width())
+                .arg(expectedSize.height())
+                .arg(int(frames.size()))
+                .arg(lastFrameSize.width())
+                .arg(lastFrameSize.height())));
+    }
+
+    // Verifies that a null-frame ending a stream has a valid presentation time that
+    // comes after the last valid frame of the stream, so it can be ordered as the
+    // last event of the stream.
+    void verifyNullFrameTiming(
+        const VideoFrameInfo &lastValidFrame,
+        const VideoFrameInfo &nullFrame,
+        const QString &context)
+    {
+        QVERIFY2(
+            nullFrame.startTime >= 0,
+            qPrintable(u"%1: null-frame has no valid start time (%2)"_s
+                .arg(context)
+                .arg(nullFrame.startTime)));
+
+        QVERIFY2(
+            nullFrame.startTime > lastValidFrame.startTime,
+            qPrintable(u"%1: null-frame start time (%2) is not after the start time "
+                       "of the last valid frame (%3)"_s
+                .arg(context)
+                .arg(nullFrame.startTime)
+                .arg(lastValidFrame.startTime)));
+
+        // The null-frame may end the last valid frame exactly at its end time, but
+        // not before it.
+        if (lastValidFrame.endTime >= 0) {
+            QVERIFY2(
+                nullFrame.startTime >= lastValidFrame.endTime,
+                qPrintable(u"%1: null-frame start time (%2) is before the end time "
+                           "of the last valid frame (%3)"_s
+                    .arg(context)
+                    .arg(nullFrame.startTime)
+                    .arg(lastValidFrame.endTime)));
+        }
+    }
+
+    void verifyStreamEndsWithNullFrame(WindowCaptureFixture &fixture, const QString &context)
+    {
+        // The backend may emit the null-frame from the thread it delivers frames on,
+        // in which case it is still in flight when the capture has been stopped.
+        const bool streamTerminated = QTest::qWaitFor(
+            [&] {
+                const std::vector<VideoFrameInfo> &frames = fixture.m_grabber.getFrameInfos();
+                return !frames.empty() && !frames.back().isValid;
+            },
+            surfaceCaptureTestTimeout());
+
+        const std::vector<VideoFrameInfo> frames = fixture.m_grabber.getFrameInfos();
+
+        QVERIFY2(
+            streamTerminated,
+            qPrintable(u"%1: the stream did not end with a null-frame, received "
+                       "%2 frame(s)"_s
+                .arg(context)
+                .arg(int(frames.size()))));
+
+        // Only the very last frame may be a null-frame; everything before it must
+        // be a valid frame, and there must be at least one valid frame.
+        QVERIFY2(
+            frames.size() >= 2,
+            qPrintable(u"%1: stream only contained a null-frame, expected at least "
+                       "one valid frame before it"_s.arg(context)));
+
+        for (size_t i = 0; i + 1 < frames.size(); ++i) {
+            QVERIFY2(
+                frames[i].isValid,
+                qPrintable(u"%1: frame #%2 (before the terminating null-frame) was "
+                           "an unexpected null-frame"_s.arg(context).arg(i)));
+        }
+
+        verifyNullFrameTiming(frames[frames.size() - 2], frames.back(), context);
+        if (QTest::currentTestFailed())
+            return;
+
+        // Wait a bit to make sure no stray frames arrive after the terminating
+        // null-frame.
+        const size_t frameCountAfterNull = frames.size();
+        QTest::qWait(500ms);
+
+        const std::vector<VideoFrameInfo> &framesAfterWait = fixture.m_grabber.getFrameInfos();
+        if (framesAfterWait.size() != frameCountAfterNull) {
+            QString strayFrames;
+            for (size_t i = frameCountAfterNull; i < framesAfterWait.size(); ++i) {
+                const VideoFrameInfo &frame = framesAfterWait[i];
+                strayFrames += u" [#%1 %2 %3x%4 startTime %5]"_s
+                    .arg(i)
+                    .arg(frame.isValid ? u"valid"_s : u"null"_s)
+                    .arg(frame.size.width())
+                    .arg(frame.size.height())
+                    .arg(frame.startTime);
+            }
+
+            QFAIL(qPrintable(u"%1: received %2 frame(s) after the terminating "
+                             "null-frame:%3"_s
+                .arg(context)
+                .arg(int(framesAfterWait.size() - frameCountAfterNull))
+                .arg(strayFrames)));
+        }
+    }
+
+    // Starts recording with autoStop enabled, and waits until the recorder is encoding.
+    void startRecordingWithAutoStop(WindowCaptureWithWidgetAndRecorderFixture &fixture)
+    {
+        fixture.m_recorder.setAutoStop(true);
+        fixture.start();
+
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+        QTRY_VERIFY_WITH_TIMEOUT(fixture.m_recorder.duration() > 0, surfaceCaptureTestTimeout());
+    }
+
+    // Waits for the recorder to stop on its own, and verifies that the recording is valid.
+    void verifyRecorderAutoStopped(WindowCaptureWithWidgetAndRecorderFixture &fixture)
+    {
+        const bool autoStopped = QTest::qWaitFor(
+            [&] {
+                return fixture.m_recorderState == QMediaRecorder::RecorderState::StoppedState;
+            },
+            surfaceCaptureTestTimeout());
+
+        if (!autoStopped) {
+            // Stop explicitly, so the recording is finalized before the test ends.
+            QVERIFY(fixture.stop());
+            QFAIL("The recorder did not auto-stop");
+        }
+
+        QVERIFY(fixture.m_recorderErrors.empty());
+        QVERIFY(QFile{ fixture.m_mediaFile }.exists());
+        QVERIFY(fixture.testVideoFilePlayback(fixture.m_mediaFile));
+    }
+
+private slots:
+    void initTestCase()
+    {
+        if (!initIntegrationTestCase())
+            return;
+
+#ifdef Q_OS_ANDROID
+     QSKIP("Feature does not work on Android");
+#endif
+
+        // The offscreen platform plugin never shows windows on the native desktop, so the
+        // capture backends have nothing they can capture.
+        if (QGuiApplication::platformName() == u"offscreen"_s)
+            QSKIP("Window capturing does not work with the offscreen platform plugin");
+
+#if defined(Q_OS_LINUX)
+     if (isCI() && qEnvironmentVariable("XDG_SESSION_TYPE").toLower() != "x11")
+         QSKIP("Skip on wayland; to be fixed");
+#elif defined(Q_OS_MACOS)
+        if (isCI()) {
+            // Window capturing requires screen capture permissions on macOS. Without them,
+            // none of the tests can succeed, so fail here to abort the entire test run.
+            QVERIFY2(
+                QAVFHelpers::checkMacOsScreenCapturePermissions(),
+                "Missing screen capture permissions. Tests are not expected to succeed.");
+        } else if (!QAVFHelpers::checkMacOsScreenCapturePermissions()) {
+            QAVFHelpers::requestMacOsScreenCapturePermissions();
+            QFAIL("Missing screen capture permissions. Grant permissions and restart test.");
+        }
+
+    // macOS CI machines have some issues with giving hardware frames of
+    // incorrect size on odd-sized windows, so skip those sizes there.
+    m_skipOddSizedWindows = isCI();
+#endif
+
+    // On some platforms, captured frame size lags slightly behind window geometry
+    // changes, so allow a short settle time after modifying geometry before
+    // starting capture or checking frame sizes.
+    //
+    // If frame size tests are flaky, it might help to increase this value.
+    if (isMacOS || isLinux)
+        WindowCaptureFixture::windowGeometrySettleDelay = 200ms;
+
+    const QWindowCapture capture;
+    if (capture.error() == QWindowCapture::CapturingNotSupported)
+        QSKIP("Screen capturing not supported");
+
+#if defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)
+        QSKIP("QTBUG-135614, disabling tst_QWindowCaptureBackend for Address Sanitizer builds, due "
+              "to flakiness");
+#endif
+    }
+
+    void isActive_returnsFalse_whenNotStarted()
+    {
+        const WindowCaptureFixture fixture;
+        QVERIFY(!fixture.m_capture.isActive());
+    }
+
+    void window_isInvalid_whenNotSet()
+    {
+        WindowCaptureFixture fixture;
+        QVERIFY(!fixture.m_capture.window().isValid());
+        QCOMPARE(fixture.m_capture.window(), QCapturableWindow{});
+    }
+
+    void error_isNoError_whenNotStarted()
+    {
+        WindowCaptureFixture fixture;
+        QCOMPARE(fixture.m_capture.error(), QWindowCapture::Error::NoError);
+    }
+
+    void windowCapture_returnsSession_whenAddedToSession()
+    {
+        WindowCaptureFixture fixture;
+        // The fixture adds the capture to its session on construction.
+        QCOMPARE(fixture.m_capture.captureSession(), &fixture.m_session);
+    }
+
+    void capturableWindows_returnsOnlyValidWindows()
+    {
+        const QList<QCapturableWindow> windows = QWindowCapture::capturableWindows();
+
+        for (const QCapturableWindow &window : windows)
+            QVERIFY(window.isValid());
+    }
+
+    void capturableWindows_containsVisibleWindow()
+    {
+        if (isMacOS) {
+            // Note: Remove this skip if this test is promoted to bundle.
+            QSKIP("On macOS, windows without a bundle identifier are filtered out of "
+                  "capturableWindows(), so our test window never appears in the list");
+        }
+
+        TestWidget widget;
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget, surfaceCaptureTestTimeout()));
+
+        // Our visible window should be discoverable in the list of capturable windows.
+        QList<QCapturableWindow> windows = QWindowCapture::capturableWindows();
+        auto found = ranges::find_if(
+            windows,
+            [&widget](const QCapturableWindow &window) {
+                return window.description() == widget.windowTitle();
+            });
+
+        QVERIFY2(found != windows.end(), "Visible window not found among capturable windows");
+        QVERIFY(found->isValid());
+    }
+
+    void capturableWindow_constructedFromWindow_canBeCaptured()
+    {
+        QVERIFY(!QCapturableWindow{}.isValid());
+        QVERIFY(!QCapturableWindow{ static_cast<QWindow *>(nullptr) }.isValid());
+
+        TestWidget widget;
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget, surfaceCaptureTestTimeout()));
+
+        QWindow *const window = widget.windowHandle();
+        QVERIFY(window);
+
+        // Constructing a QCapturableWindow directly from a live QWindow yields a
+        // valid handle describing that window.
+        QCapturableWindow capturable{ window };
+        QVERIFY(capturable.isValid());
+        QCOMPARE(capturable.description(), widget.windowTitle());
+
+        // The handle constructed from the QWindow can actually be captured.
+        WindowCaptureFixture fixture;
+        fixture.m_capture.setWindow(capturable);
+        fixture.m_capture.setActive(true);
+
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+        QVERIFY(fixture.m_capture.isActive());
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void capturableWindows_canAllBeCaptured_data()
+    {
+        QTest::addColumn<QCapturableWindow>("window");
+
+        const QList<QCapturableWindow> windows = QWindowCapture::capturableWindows();
+
+        if (windows.empty()) {
+            // CI machines may run without any windows other than our own, which
+            // do not exist yet at this point.
+            if (isCI())
+                QSKIP("QWindowCapture::capturableWindows() returned no windows");
+
+            // Without any rows, QtTest still runs the test function once, and QFETCH
+            // aborts the whole test run. Add an invalid window instead, so that the
+            // test function reports the empty list as a failure.
+            QTest::newRow("no capturable windows") << QCapturableWindow{};
+            return;
+        }
+
+        for (qsizetype i = 0; i < windows.size(); ++i) {
+            // Window descriptions are not unique, so prefix the tag with the
+            // index to keep the data tags distinct.
+            const QString tag = u"%1: %2"_s.arg(i).arg(windows.at(i).description());
+            QTest::newRow(qPrintable(tag)) << windows.at(i);
+        }
+    }
+
+    /*
+        Every handle that capturableWindows() hands out is advertised as
+        capturable, so starting a stream on any of them must succeed and deliver
+        a valid frame.
+
+        Note that this captures windows belonging to other applications, which
+        makes it sensitive to whatever happens to be on screen.
+    */
+    void capturableWindows_canAllBeCaptured()
+    {
+        QFETCH(const QCapturableWindow, window);
+        QVERIFY2(window.isValid(), "QWindowCapture::capturableWindows() returned no windows");
+
+        WindowCaptureFixture fixture;
+        fixture.m_capture.setWindow(window);
+        fixture.m_capture.setActive(true);
+
+        // Ensure that we have received a frame
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        QVERIFY(fixture.m_capture.isActive());
+        QCOMPARE(fixture.m_activations.size(), 1);
+        QVERIFY(fixture.m_activations.at(0).at(0).toBool());
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void setActive_failsAndEmitsError_whenWindowIsDefaultConstructed()
+    {
+        WindowCaptureFixture fixture;
+        QWindowCapture &windowCapture = fixture.m_capture;
+
+        QSignalSpy windowChanges{ &windowCapture, &QWindowCapture::windowChanged };
+
+        // A default-constructed QCapturableWindow does not refer to any window,
+        // and can never be captured.
+        const QCapturableWindow emptyWindow;
+        QVERIFY(!emptyWindow.isValid());
+
+        windowCapture.setWindow(emptyWindow);
+
+        // Assigning an invalid window to an inactive capture is a no-op, since
+        // it already holds a default-constructed window.
+        QCOMPARE(windowCapture.window(), QCapturableWindow{});
+        QCOMPARE(windowChanges.size(), 0);
+        QVERIFY(fixture.m_errors.empty());
+
+        // Starting the capture must fail and report an error.
+        windowCapture.setActive(true);
+
+        QVERIFY(!windowCapture.isActive());
+        QVERIFY(fixture.m_activations.empty());
+        QCOMPARE(fixture.m_errors.size(), 1);
+
+        // No frames must ever arrive on the stream.
+        QTest::qWait(500ms);
+        QVERIFY(fixture.m_grabber.getFrameInfos().empty());
+
+        // TODO: Verify a specific error code once it is consistent across
+        // platforms.
+        // QCOMPARE(windowCapture.error(), QWindowCapture::Error::NotFound);
+    }
+
+    void setActive_failsAndEmitsErrors_whenNoWindowSelected()
+    {
+        WindowCaptureFixture fixture;
+
+        QWindowCapture &windowCapture = fixture.m_capture;
+
+        QSignalSpy errorChangedSpy { &windowCapture, &QWindowCapture::errorChanged };
+
+        QCOMPARE(windowCapture.error(), QWindowCapture::Error::NoError);
+
+        windowCapture.setActive(true);
+
+        QVERIFY(!windowCapture.isActive());
+
+        // Make sure we received exactly one signal, and the error code is NotFound.
+        QCOMPARE(fixture.m_errors.count(), 1);
+        QCOMPARE(errorChangedSpy.count(), 1);
+
+        // TODO: Verify last error emitted is a specific error code.
+        /*
+        auto lastErrorEmitted = QWindowCapture::Error(fixture.m_errors[0][0].toInt());
+        QCOMPARE(lastErrorEmitted, QWindowCapture::Error::NotFound);
+
+        QCOMPARE(windowCapture.error(), QWindowCapture::Error::NotFound);
+        */
+    }
+
+    void setActive_isNoOp_whenStoppingCaptureThatNeverStarted()
+    {
+        WindowCaptureFixture fixture;
+
+        QWindowCapture &windowCapture = fixture.m_capture;
+        QVERIFY(!windowCapture.isActive());
+
+        // Stopping a capture that was never started should not change state,
+        // emit activeChanged, or raise an error.
+        windowCapture.setActive(false);
+
+        QVERIFY(!windowCapture.isActive());
+        QVERIFY(fixture.m_activations.empty());
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void setActive_isNoOp_whenAlreadyActive()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        QWindowCapture &windowCapture = fixture.m_capture;
+        QVERIFY(windowCapture.isActive());
+        QCOMPARE(fixture.m_activations.size(), 1);
+
+        // Activating an already-active capture should not emit activeChanged again.
+        windowCapture.setActive(true);
+
+        QVERIFY(windowCapture.isActive());
+        QCOMPARE(fixture.m_activations.size(), 1);
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void setActive_startsWindowCapture_whenCalledWithTrue()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+
+        // Ensure that we have received a frame
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        QCOMPARE(fixture.m_activations.size(), 1);
+        QVERIFY(fixture.m_activations.at(0).at(0).toBool());
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void setActive_stopsWindowCapture_whenCalledWithFalse()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+
+        QWindowCapture &windowCapture = fixture.m_capture;
+
+        QVERIFY(windowCapture.isActive());
+        QCOMPARE(fixture.m_activations.size(), 1);
+
+        // Ensure capture is actually running before stopping it
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        windowCapture.setActive(false);
+
+        // activeChanged has now fired twice: once for start, once for stop
+        QCOMPARE(fixture.m_activations.size(), 2);
+        QVERIFY(!fixture.m_activations.at(1).at(0).toBool());
+        QVERIFY(!windowCapture.isActive());
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void setActive_restartsWindowCapture_whenStartedAgainAfterStop()
+    {
+        constexpr int restartCount = 3;
+
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+
+        QWindowCapture &windowCapture = fixture.m_capture;
+
+        // Ensure capture is actually running before stopping it
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        for (int i = 0; i < restartCount; ++i) {
+            windowCapture.setActive(false);
+            QVERIFY(!fixture.m_capture.isActive());
+
+            windowCapture.setActive(true);
+
+            QVERIFY(fixture.tryWaitForFirstFrameInfo());
+            QVERIFY(windowCapture.isActive());
+        }
+
+        // activeChanged fired for the initial start plus a stop/start pair per restart
+        QCOMPARE(fixture.m_activations.size(), 1 + 2 * restartCount);
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    // For some platforms, the hardware-frames we receive are tied to internal frame pools.
+    // If our QVideoFrames point into these pools, we can run into a problem where storing
+    // QVideoFrames over time can stall the stream. We test if we can store a good chunk of
+    // QVideoFrames without stalling.
+    void storingFramesDoesNotStallStream()
+    {
+        // We assume 20 frames is higher than the internal pool of the backend.
+        constexpr int capturedFrameCount = 20;
+
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+
+        // Use animated content to make sure backend does not
+        // consider the content idle.
+        fixture.m_widget.setDisplayPattern(TestWidget::Pattern::Animated);
+
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        std::vector<QVideoFrame> capturedFrames = fixture.m_grabber.waitAndTakeVideoFrames(
+            capturedFrameCount);
+
+        // If this fails, it's an indication we stalled the stream.
+        QCOMPARE_GE(capturedFrames.size(), size_t(capturedFrameCount));
+    }
+
+    void stream_endsWithNullFrame_whenStopped()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+        QVERIFY(fixture.m_capture.isActive());
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        // Stopping the capture must terminate the stream with a null-frame.
+        fixture.m_capture.setActive(false);
+        QVERIFY(!fixture.m_capture.isActive());
+
+        verifyStreamEndsWithNullFrame(fixture, u"setActive(false)"_s);
+
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void stream_endsWithNullFrame_whenDestroyed()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+        QVERIFY(fixture.m_capture.isActive());
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        // Destroying the QWindowCapture must terminate the stream with a null-frame.
+        // The grabber (video sink) outlives the capture, so it will still receive
+        // the terminating null-frame.
+        fixture.m_captureStorage.reset();
+
+        verifyStreamEndsWithNullFrame(fixture, u"QWindowCapture destroyed"_s);
+
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void stream_endsWithNullFrame_whenRestarted()
+    {
+        constexpr int streamCount = 3;
+
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+        QVERIFY(fixture.m_capture.isActive());
+
+        const auto nullFrameCount = [&] {
+            int count = 0;
+            for (const VideoFrameInfo &frame : fixture.m_grabber.getFrameInfos()) {
+                if (!frame.isValid)
+                    ++count;
+            }
+            return count;
+        };
+
+        for (int i = 0; i < streamCount; ++i) {
+            QVERIFY2(
+                fixture.tryWaitForFirstFrameInfo(),
+                qPrintable(u"stream #%1: no first frame was received"_s.arg(i)));
+
+            // Stopping the capture must terminate every stream with a null-frame,
+            // not just the first one.
+            fixture.m_capture.setActive(false);
+            QVERIFY(!fixture.m_capture.isActive());
+
+            // Wait for the null-frame before restarting, so we know which stream
+            // it belongs to.
+            const bool streamTerminated = QTest::qWaitFor(
+                [&] {
+                    const std::vector<VideoFrameInfo> &frames = fixture.m_grabber.getFrameInfos();
+                    return !frames.empty() && !frames.back().isValid;
+                },
+                surfaceCaptureTestTimeout());
+            QVERIFY2(
+                streamTerminated,
+                qPrintable(u"stream #%1: the stream did not end with a null-frame"_s.arg(i)));
+            QCOMPARE(nullFrameCount(), i + 1);
+
+            if (i + 1 < streamCount) {
+                fixture.m_capture.setActive(true);
+                QVERIFY(fixture.m_capture.isActive());
+            }
+        }
+
+        // Every stream must consist of at least one valid frame, followed by exactly
+        // one null-frame. The null-frame must be presented after the last valid
+        // frame of its stream.
+        const std::vector<VideoFrameInfo> frames = fixture.m_grabber.getFrameInfos();
+
+        int streamIndex = 0;
+        size_t streamFrameCount = 0;
+        for (size_t i = 0; i < frames.size(); ++i) {
+            const VideoFrameInfo &frame = frames[i];
+            if (frame.isValid) {
+                ++streamFrameCount;
+                continue;
+            }
+
+            QVERIFY2(
+                streamFrameCount > 0,
+                qPrintable(u"stream #%1: ended with a null-frame (frame #%2) without "
+                           "delivering any valid frame"_s
+                    .arg(streamIndex)
+                    .arg(i)));
+
+            verifyNullFrameTiming(frames[i - 1], frame, u"stream #%1"_s.arg(streamIndex));
+            if (QTest::currentTestFailed())
+                return;
+
+            ++streamIndex;
+            streamFrameCount = 0;
+        }
+
+        QCOMPARE(streamIndex, streamCount);
+        QVERIFY(!frames.back().isValid);
+
+        QCOMPARE(fixture.m_activations.size(), 2 * streamCount);
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void setWindow_switchesSource_whileActive()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start({ 60, 40 }));
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        QWindowCapture &windowCapture = fixture.m_capture;
+
+        QSignalSpy windowChanges{ &windowCapture, &QWindowCapture::windowChanged };
+
+        // Create a second, differently-sized window to switch to
+        TestWidget secondWidget;
+        secondWidget.setSize({ 120, 80 });
+        secondWidget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&secondWidget, surfaceCaptureTestTimeout()));
+
+        std::optional<QCapturableWindow> secondWindow =
+            WindowCaptureWithWidgetFixture::findCaptureWindow(
+                secondWidget.windowTitle(),
+                secondWidget.windowHandle());
+        QVERIFY(secondWindow && secondWindow->isValid());
+
+        // Switch the captured window while capture is active
+        windowCapture.setWindow(*secondWindow);
+
+        QCOMPARE(windowChanges.size(), 1);
+        QCOMPARE(windowCapture.window(), *secondWindow);
+
+        // Switching source keeps the capture active
+        QVERIFY(windowCapture.isActive());
+        // activeChanged does not fire in between switching source
+        QCOMPARE(fixture.m_activations.size(), 1);
+
+        // Make sure we get frames from the new larger window. The captured frame
+        // is delivered in physical pixels, so scale by the device pixel ratio.
+        const QSize expectedSize =
+            (QSizeF(secondWidget.size()) * secondWidget.devicePixelRatio()).toSize();
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !fixture.m_grabber.getFrameInfos().empty()
+            && fixture.m_grabber.getFrameInfos().back().size == expectedSize,
+            surfaceCaptureTestTimeout());
+
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    // Switching the source of an active capture must keep it active, without
+    // emitting any activation signals in between. Otherwise it may trigger
+    // QMediaRecorder::autoStop.
+    void setWindow_doesNotEmitActiveChanged_whenSwitchedWhileActive()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start({ 60, 40 }));
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+        QCOMPARE(fixture.m_activations.size(), 1);
+
+        // A differently-sized second window, so we can tell the sources apart.
+        TestWidget secondWidget;
+        secondWidget.setSize({ 120, 80 });
+        secondWidget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&secondWidget, surfaceCaptureTestTimeout()));
+
+        const std::optional<QCapturableWindow> secondWindow =
+            WindowCaptureWithWidgetFixture::findCaptureWindow(
+                secondWidget.windowTitle(),
+                secondWidget.windowHandle());
+        QVERIFY(secondWindow && secondWindow->isValid());
+
+        // The captured frame is delivered in physical pixels.
+        const auto expectedFrameSize = [](const TestWidget &widget) {
+            return (QSizeF(widget.size()) * widget.devicePixelRatio()).toSize();
+        };
+
+        // Switch back and forth. Wait for frames of each new source, so that we also
+        // catch activation signals that are emitted while the new source is starting up.
+        fixture.m_capture.setWindow(*secondWindow);
+        QVERIFY(fixture.m_capture.isActive());
+        waitForVideoFrameExpectedSize(
+            fixture,
+            expectedFrameSize(secondWidget),
+            u"Switched to second window"_s);
+
+        fixture.m_capture.setWindow(fixture.m_captureWindow);
+        QVERIFY(fixture.m_capture.isActive());
+        waitForVideoFrameExpectedSize(
+            fixture,
+            expectedFrameSize(fixture.m_widget),
+            u"Switched back to first window"_s);
+
+        QVERIFY(fixture.m_capture.isActive());
+        QCOMPARE(fixture.m_activations.size(), 1);
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    // The maximum frame rate must apply to the new source after a switch, both
+    // in not exceeding it and in not stalling.
+    void setWindow_maintainsFrameRate_whenSwitchedWhileActive()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+
+        // Animated content, so the backend does not consider the content idle.
+        fixture.m_widget.setDisplayPattern(TestWidget::Pattern::Animated);
+
+        const float frameRate = 5.f;
+        fixture.m_capture.setMaximumFrameRate(frameRate);
+
+        QVERIFY(fixture.start({ 60, 40 }));
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        TestWidget secondWidget;
+        secondWidget.setDisplayPattern(TestWidget::Pattern::Animated);
+        secondWidget.setSize({ 120, 80 });
+        secondWidget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&secondWidget, surfaceCaptureTestTimeout()));
+
+        const std::optional<QCapturableWindow> secondWindow =
+            WindowCaptureWithWidgetFixture::findCaptureWindow(
+                secondWidget.windowTitle(),
+                secondWidget.windowHandle());
+        QVERIFY(secondWindow && secondWindow->isValid());
+
+        // The captured frame is delivered in physical pixels.
+        const auto expectedFrameSize = [](const TestWidget &widget) {
+            return (QSizeF(widget.size()) * widget.devicePixelRatio()).toSize();
+        };
+
+        // Range [0, 1]. Lower is better, but may increase flakiness.
+        const float slopFactor = isCI() ? 0.2f : 0.1f;
+
+        // Wait for the switch to settle, then check the rate of the new source.
+        auto verifyFrameRateAfterSwitch = [&](
+            const QCapturableWindow &window,
+            const TestWidget &widget,
+            const QString &description)
+        {
+            fixture.m_capture.setWindow(window);
+            waitForVideoFrameExpectedSize(fixture, expectedFrameSize(widget), description);
+
+            std::optional<std::chrono::milliseconds> durationBetweenFrames =
+                fixture.m_grabber.durationBetweenFrames(3, frameRate);
+            QVERIFY2(
+                durationBetweenFrames.has_value(),
+                qPrintable(description + u": did not receive enough QVideoFrames to measure framerate"_s));
+
+            const qreal actualFps = 1000.0 / durationBetweenFrames->count();
+            QCOMPARE_LT(actualFps, frameRate * (1 + slopFactor));
+            QCOMPARE_GT(actualFps, frameRate * (1 - slopFactor * 2));
+        };
+
+        verifyFrameRateAfterSwitch(
+            *secondWindow, secondWidget, u"Switched to second window"_s);
+        if (QTest::currentTestFailed())
+            return;
+        verifyFrameRateAfterSwitch(
+            fixture.m_captureWindow, fixture.m_widget, u"Switched back to first window"_s);
+        if (QTest::currentTestFailed())
+            return;
+
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void setWindow_stopsCapture_whenSwitchedToInvalidWindow()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+
+        QWindowCapture &windowCapture = fixture.m_capture;
+
+        // Ensure capture is actually running before switching window
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+        QCOMPARE(fixture.m_activations.size(), 1);
+        QVERIFY(windowCapture.isActive());
+
+        // Switching to a default-constructed (invalid) window cannot be captured,
+        // so the capture stops and becomes inactive.
+        windowCapture.setWindow(QCapturableWindow{});
+
+        QVERIFY(!windowCapture.isActive());
+
+        // activeChanged fired again for the deactivation
+        QCOMPARE(fixture.m_activations.size(), 2);
+        QCOMPARE(windowCapture.window(), QCapturableWindow{});
+        // We should emit an error when invalid window is assigned to
+        // active QWindowCapture.
+        QCOMPARE(fixture.m_errors.size(), 1);
+
+        // TODO: Check that last error state is a specific error code.
+        // QCOMPARE(windowCapture.error(), QWindowCapture::Error::NotFound);
+    }
+
+    // Switching source while active continues the stream with the new source. It must
+    // not end the stream with a null-frame, as consumers such as QMediaRecorder would
+    // then consider the capture to have ended.
+    void setWindow_doesNotEmitNullFrame_whenSwitchingSourceWhileActive()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start({ 60, 40 }));
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        // Create a second, differently-sized window to switch to
+        TestWidget secondWidget;
+        secondWidget.setSize({ 120, 80 });
+        secondWidget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&secondWidget, surfaceCaptureTestTimeout()));
+
+        std::optional<QCapturableWindow> secondWindow =
+            WindowCaptureWithWidgetFixture::findCaptureWindow(
+                secondWidget.windowTitle(),
+                secondWidget.windowHandle());
+        QVERIFY(secondWindow && secondWindow->isValid());
+
+        fixture.m_capture.setWindow(*secondWindow);
+        QVERIFY(fixture.m_capture.isActive());
+
+        // Wait for frames of the new window's size, so we know the backend has
+        // completed the switch. The captured frame is delivered in physical pixels,
+        // so scale by the device pixel ratio.
+        const QSize expectedSize =
+            (QSizeF(secondWidget.size()) * secondWidget.devicePixelRatio()).toSize();
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !fixture.m_grabber.getFrameInfos().empty()
+            && fixture.m_grabber.getFrameInfos().back().size == expectedSize,
+            surfaceCaptureTestTimeout());
+
+        for (const VideoFrameInfo &frame : fixture.m_grabber.getFrameInfos())
+            QVERIFY(frame.isValid);
+
+        QVERIFY(fixture.m_capture.isActive());
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void setWindow_updatesPropertyAndEmitsSignal_whenNotActive()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+
+        fixture.m_widget.setSize({ 60, 40 });
+        fixture.m_widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(
+            &fixture.m_widget,
+            surfaceCaptureTestTimeout()));
+
+        const std::optional<QCapturableWindow> window =
+            WindowCaptureWithWidgetFixture::findCaptureWindow(
+                fixture.m_widget.windowTitle(),
+                fixture.m_widget.windowHandle());
+        QVERIFY(window && window->isValid());
+
+        QWindowCapture &windowCapture = fixture.m_capture;
+        QSignalSpy windowChanges{ &windowCapture, &QWindowCapture::windowChanged };
+
+        windowCapture.setWindow(*window);
+
+        QCOMPARE(windowChanges.size(), 1);
+        QCOMPARE(windowCapture.window(), *window);
+
+        // Selecting a window without activating must not start capturing or raise errors.
+        QVERIFY(!windowCapture.isActive());
+        QVERIFY(fixture.m_activations.empty());
+        QVERIFY(fixture.m_errors.empty());
+
+        // Setting the same window again is a no-op and must not emit windowChanged.
+        windowCapture.setWindow(*window);
+        QCOMPARE(windowChanges.size(), 1);
+    }
+
+    void setFrameRate_updatesPropertyAndEmitsSignal()
+    {
+        WindowCaptureFixture fixture;
+
+        auto frameRateEquals = [](std::optional<qreal> frameRate, float value) {
+            return frameRate && qFuzzyCompare(*frameRate, static_cast<qreal>(value));
+        };
+
+        // No preferred frame rate initially
+        QVERIFY(!fixture.m_capture.maximumFrameRate());
+
+        // Setting a frame rate updates the property and emits maximumFrameRateChanged
+        const float newFrameRate = 1.f;
+        fixture.m_capture.setMaximumFrameRate(newFrameRate);
+
+        QCOMPARE(fixture.m_frameRates.size(), 1);
+        QVERIFY(frameRateEquals(fixture.m_capture.maximumFrameRate(), newFrameRate));
+
+        fixture.m_capture.setMaximumFrameRate(std::nullopt);
+
+        QCOMPARE(fixture.m_frameRates.size(), 2);
+        QVERIFY(!fixture.m_capture.maximumFrameRate());
+
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void setFrameRate_emitsFramesAtCorrectRate()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+
+        // Use animated content to make sure backend does not
+        // consider the content idle.
+        fixture.m_widget.setDisplayPattern(TestWidget::Pattern::Animated);
+
+        const float newFrameRate = 1.f;
+        fixture.m_capture.setMaximumFrameRate(newFrameRate);
+
+        QVERIFY(fixture.start());
+
+        // Range [0, 1]. Lower is better, but may increase flakiness.
+        float slopFactor = 0.1;
+        if (isCI()) {
+            slopFactor = 0.2;
+        }
+
+        // Check framerate is roughly 1fps
+        using namespace std::chrono;
+        std::optional<std::chrono::milliseconds> durationBetweenFrames =
+            fixture.m_grabber.durationBetweenFrames(3, newFrameRate);
+        QVERIFY2(
+            durationBetweenFrames.has_value(),
+            "Did not receive enough QVideoFrames to measure framerate");
+        const qreal actualFps = 1000.0 / durationBetweenFrames->count();
+        QCOMPARE_LT(actualFps, newFrameRate * (1 + slopFactor));
+    }
+
+    void firstFrame_hasZeroStartTime_whenCaptureIsStartedOrRestarted()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        constexpr int restartCount = 2;
+
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+
+        QWindowCapture &windowCapture = fixture.m_capture;
+
+        // Presentation times are relative to the start of the stream, so the first
+        // frame of every stream, including restarted ones, must start at zero.
+        for (int i = 0; i <= restartCount; ++i) {
+            if (i > 0) {
+                windowCapture.setActive(false);
+                // Deactivation flushes the backend, but frames it already produced may
+                // still be queued towards the sink. Deliver them before restarting, so
+                // they are not mistaken for the first frame of the new stream.
+                QCoreApplication::processEvents();
+                windowCapture.setActive(true);
+            }
+
+            const std::optional<VideoFrameInfo> frame = fixture.tryWaitForFirstFrameInfo();
+            QVERIFY(frame);
+            QCOMPARE(frame->startTime, 0);
+        }
+    }
+
+    void capturedFrames_havePresentationTimesInIncreasingOrder()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        WindowCaptureWithWidgetFixture fixture;
+
+        // Animated content so the backend keeps producing new frames rather than
+        // considering the content idle.
+        fixture.m_widget.setDisplayPattern(TestWidget::Pattern::Animated);
+        QVERIFY(fixture.start());
+
+        const std::vector<VideoFrameInfo> frames = fixture.m_grabber.waitAndTakeFrameInfos(10);
+        QVERIFY2(
+            frames.size() >= 2,
+            "Did not receive enough QVideoFrames to compare presentation times");
+
+        for (size_t i = 1; i < frames.size(); ++i) {
+            const qint64 prevStart = frames[i - 1].startTime;
+            const qint64 currStart = frames[i].startTime;
+
+            // Presentation (start) times must strictly increase along the stream.
+            QVERIFY2(
+                currStart > prevStart,
+                qPrintable(u"Frame #%1 start time (%2) is not after frame #%3 "
+                           "start time (%4)"_s
+                    .arg(i).arg(currStart).arg(i - 1).arg(prevStart)));
+
+            // Where the backend also reports an end time, the frame must not end
+            // before it starts, and the next frame must not start before the
+            // previous one ended (frames must not overlap in time).
+            const qint64 prevEnd = frames[i - 1].endTime;
+            if (prevEnd >= 0) {
+                QVERIFY2(
+                    prevEnd >= prevStart,
+                    qPrintable(u"Frame #%1 end time (%2) precedes its start time (%3)"_s
+                        .arg(i - 1).arg(prevEnd).arg(prevStart)));
+                QVERIFY2(
+                    currStart >= prevEnd,
+                    qPrintable(u"Frame #%1 start time (%2) precedes frame #%3 "
+                               "end time (%4)"_s
+                        .arg(i).arg(currStart).arg(i - 1).arg(prevEnd)));
+            }
+        }
+    }
+
+    void setFrameRate_emitsFramesWithExpectedPresentationTimeSpacing()
+    {
+        WindowCaptureWithWidgetFixture fixture;
+
+        // Use animated content to make sure the backend does not consider the
+        // content idle and keeps emitting at the requested rate.
+        fixture.m_widget.setDisplayPattern(TestWidget::Pattern::Animated);
+
+        const float frameRate = 5.f;
+        fixture.m_capture.setMaximumFrameRate(frameRate);
+
+        QVERIFY(fixture.start());
+
+        const std::vector<VideoFrameInfo> frames =
+            fixture.m_grabber.waitAndTakeFrameInfos(6, frameRate);
+        QVERIFY2(
+            frames.size() >= 2,
+            "Did not receive enough QVideoFrames to measure presentation time spacing");
+
+        // Expected spacing between consecutive presentation times, in microseconds.
+        const qint64 expectedSpacingUs = qint64(std::micro::den / frameRate);
+
+        // maximumFrameRate is an upper bound, so frames must not be spaced closer
+        // than the requested interval (allowing some slop). An occasional dropped
+        // frame widens the gap, so we do not enforce a tight upper bound per gap;
+        // instead we require the average spacing to stay near the expected value.
+        const double lowerSlop = 0.15;
+        const double upperAverageSlop = 0.5;
+
+        qint64 totalSpacingUs = 0;
+        for (size_t i = 1; i < frames.size(); ++i) {
+            const qint64 spacingUs = frames[i].startTime - frames[i - 1].startTime;
+            totalSpacingUs += spacingUs;
+
+            QVERIFY2(
+                spacingUs >= qint64(expectedSpacingUs * (1 - lowerSlop)),
+                qPrintable(u"Frames #%1 and #%2 are spaced %3us apart, closer than "
+                           "the requested minimum of %4us"_s
+                    .arg(i - 1).arg(i).arg(spacingUs).arg(expectedSpacingUs)));
+        }
+
+        const qint64 averageSpacingUs = totalSpacingUs / qint64(frames.size() - 1);
+        QVERIFY2(
+            averageSpacingUs <= qint64(expectedSpacingUs * (1 + upperAverageSlop)),
+            qPrintable(u"Average presentation time spacing %1us is far larger than "
+                       "the requested %2us"_s
+                .arg(averageSpacingUs).arg(expectedSpacingUs)));
+    }
+
+    void capturedImage_equals_imageFromGrab_data()
+    {
+        QTest::addColumn<QSize>("windowSize");
+        QTest::newRow("small-window") << QSize{60, 40};
+        QTest::newRow("big-window") << QApplication::primaryScreen()->size();
+
+        if (!skipOddSizedWindows()) {
+            QTest::newRow("single-pixel-window") << QSize{1, 1};
+            QTest::newRow("odd-width-window") << QSize{ 61, 40 };
+            QTest::newRow("odd-height-window") << QSize{ 60, 41 };
+        }
+    }
+
+    void capturedImage_equals_imageFromGrab()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        QFETCH(QSize, windowSize);
+
+        WindowCaptureWithWidgetFixture fixture;
+        fixture.m_grabber.setRetainFirstVideoFrame(true);
+        QVERIFY(fixture.start(windowSize));
+
+        const QImage expected = fixture.m_widget.grabImage();
+
+        const std::optional<QVideoFrame> frame = fixture.consumeFirstVideoFrame();
+        QVERIFY(frame);
+        const QImage actual = frame->toImage();
+
+        QVERIFY(fixture.compareImages(actual, expected));
+    }
+
+    void capturedFrame_hasExpectedSize_data()
+    {
+        QTest::addColumn<QSize>("windowSize");
+        QTest::newRow("small-window") << QSize{ 60, 40 };
+        QTest::newRow("big-window") << QSize{ 800, 600 };
+        if (!skipOddSizedWindows()) {
+            QTest::newRow("odd-width-window") << QSize{ 61, 40 };
+            QTest::newRow("odd-height-window") << QSize{ 60, 41 };
+        }
+    }
+
+    void capturedFrame_hasExpectedSize()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        QFETCH(QSize, windowSize);
+
+        WindowCaptureWithWidgetFixture fixture;
+
+        QVERIFY(fixture.start(windowSize, FirstFrameSizePolicy::MustMatchWindowSize));
+        QVERIFY(fixture.m_capture.isActive());
+
+        const QSize expectedSize =
+            (QSizeF(fixture.m_widget.size()) * fixture.m_widget.devicePixelRatio()).toSize();
+
+        QVERIFY(QTest::qWaitFor(
+            [&] { return !fixture.m_grabber.getFrameInfos().empty(); }, surfaceCaptureTestTimeout()));
+
+        const std::vector<VideoFrameInfo> frames = fixture.m_grabber.getFrameInfos();
+        for (size_t i = 0; i < frames.size(); ++i) {
+            QVERIFY2(
+                frames[i].size == expectedSize,
+                qPrintable(u"Captured frame #%1 was %2x%3, but expected %4x%5"_s
+                    .arg(i)
+                    .arg(frames[i].size.width())
+                    .arg(frames[i].size.height())
+                    .arg(expectedSize.width())
+                    .arg(expectedSize.height())));
+        }
+
+        // The video sink should report the same size as the frames it receives.
+        QVERIFY2(
+            fixture.m_grabber.videoSize() == expectedSize,
+            qPrintable(u"Video sink size %1x%2 differs from expected %3x%4"_s
+                .arg(fixture.m_grabber.videoSize().width())
+                .arg(fixture.m_grabber.videoSize().height())
+                .arg(expectedSize.width())
+                .arg(expectedSize.height())));
+
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    // For some backends it's possible to unintentionally store size-snapshots
+    // in QCapturableWindow (i.e ScreenCaptureKit.SCWindow). This test
+    // checks that our stream starts at the current window size, not
+    // when the QCapturableWindow handle was constructed.
+    void capture_startsAtCurrentSize_whenWindowResizedBeforeStart()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        WindowCaptureWithWidgetFixture fixture;
+
+        const QSize initialSize{ 200, 150 };
+        const QSize resizedSize{ 400, 300 };
+
+        fixture.m_widget.setSize(initialSize);
+        fixture.m_widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&fixture.m_widget, surfaceCaptureTestTimeout()));
+
+        // Create the capturable-window handle while the window is still at the
+        // initial size.
+        const QCapturableWindow handle{ fixture.m_widget.windowHandle() };
+        QVERIFY(handle.isValid());
+
+        // Resize, and wait until the new size has actually taken effect before we
+        // start capturing, so the new size is the window's live size.
+        fixture.m_widget.setSize(resizedSize);
+        QVERIFY(QTest::qWaitFor(
+            [&] { return fixture.m_widget.size() == resizedSize; },
+            surfaceCaptureTestTimeout()));
+        // This test inspects the very first captured frame's size, so let the
+        // capture backend observe the new geometry before we start the stream
+        fixture.waitForWindowGeometryToSettle(FirstFrameSizePolicy::MustMatchWindowSize);
+
+        // Start capturing using the handle that was created at the old size.
+        fixture.m_capture.setWindow(handle);
+        fixture.m_capture.setActive(true);
+        QVERIFY(fixture.m_capture.isActive());
+
+        // Every captured frame, including the very first, must reflect the
+        // new size of the window.
+        const QSize expectedSize =
+            (QSizeF(resizedSize) * fixture.m_widget.devicePixelRatio()).toSize();
+
+        QVERIFY(QTest::qWaitFor(
+            [&] { return !fixture.m_grabber.getFrameInfos().empty(); }, surfaceCaptureTestTimeout()));
+
+        const std::vector<VideoFrameInfo> frames = fixture.m_grabber.getFrameInfos();
+        for (size_t i = 0; i < frames.size(); ++i) {
+            QVERIFY2(
+                frames[i].size == expectedSize,
+                qPrintable(u"Captured frame #%1 was %2x%3, but expected %4x%5"_s
+                    .arg(i)
+                    .arg(frames[i].size.width())
+                    .arg(frames[i].size.height())
+                    .arg(expectedSize.width())
+                    .arg(expectedSize.height())));
+        }
+
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void capturedFrame_hasNewSize_whenWindowResizedOnce()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        // The captured frame is delivered in physical pixels, so scale the
+        // window's logical size by the device pixel ratio to get the expected
+        // frame size.
+        const auto expectedFrameSize = [](const TestWidget &widget) {
+            return (QSizeF(widget.size()) * widget.devicePixelRatio()).toSize();
+        };
+
+        WindowCaptureWithWidgetFixture fixture;
+        // Use animated content to make sure backend does not
+        // consider the content idle.
+        fixture.m_widget.setDisplayPattern(TestWidget::Pattern::Animated);
+        QVERIFY(fixture.start({ 200, 150 }));
+        QVERIFY(fixture.m_capture.isActive());
+
+        // Make sure we are receiving frames at the initial window size before
+        // we resize.
+        waitForVideoFrameExpectedSize(
+            fixture,
+            expectedFrameSize(fixture.m_widget), u"Initial capture at 200x150"_s);
+        if (QTest::currentTestFailed())
+            return;
+
+        fixture.resizeWidget({ 400, 300 });
+
+        // At some point we have to receive frames with the new size.
+        waitForVideoFrameExpectedSize(
+            fixture,
+            expectedFrameSize(fixture.m_widget), u"Resized window to 400x300"_s);
+
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void capturedFrame_hasNewSize_whenWindowResized_data()
+    {
+        using QOSVersion = QOperatingSystemVersion;
+        if (isCI()
+            && QOSVersion::currentType() == QOSVersion::OSType::MacOS
+            && QOSVersion::current() < QOSVersion(QOSVersion::OSType::MacOS, 26))
+        {
+            QSKIP("macOS 15 CI machines and older have issues with reporting content size during window resizing");
+        }
+
+        QTest::addColumn<int>("increment");
+        QTest::newRow("shrink by 1") << -1;
+        QTest::newRow("shrink by 2") << -2;
+        QTest::newRow("grow by 1") << 1;
+        QTest::newRow("grow by 2") << 2;
+    }
+
+    void capturedFrame_hasNewSize_whenWindowResized()
+    {
+        QFETCH(int, increment);
+
+        constexpr int incrementalSteps = 10;
+
+        // The captured frame is delivered in physical pixels, so scale the
+        // window's logical size by the device pixel ratio to get the expected
+        // frame size.
+        const auto expectedFrameSizeFn = [](const TestWidget &widget) {
+            return (QSizeF(widget.size()) * widget.devicePixelRatio()).toSize();
+        };
+
+        WindowCaptureWithWidgetFixture fixture;
+
+        QSize windowSize = { 200, 150 };
+        QVERIFY(fixture.start(windowSize));
+        QVERIFY(fixture.m_capture.isActive());
+
+        // Make sure we are receiving frames at the initial window size before
+        // we start resizing.
+        waitForVideoFrameExpectedSize(
+            fixture,
+            expectedFrameSizeFn(fixture.m_widget),
+            u"Initial capture at 200x150"_s);
+        if (QTest::currentTestFailed())
+            return;
+
+        for (int step = 0; step < incrementalSteps; ++step) {
+            windowSize += QSize{ increment, increment };
+            fixture.resizeWidget(windowSize);
+
+            // At some point, we must receive a frame that has the
+            // expected size.
+            waitForVideoFrameExpectedSize(
+                fixture,
+                expectedFrameSizeFn(fixture.m_widget),
+                u"Resized window to %1x%2 (step %3)"_s
+                    .arg(windowSize.width())
+                    .arg(windowSize.height())
+                    .arg(step));
+            if (QTest::currentTestFailed())
+                return;
+        }
+
+        QVERIFY(fixture.m_errors.empty());
+    }
+
+    void capturedImage_changes_whenWindowContentChanges()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        // Compare every new frame as it arrives, rather than storing the frames.
+        // If any of the new frames match, the test succeeds.
+        QImage expectedGridImage;
+        bool anyNewFrameMatchesNewContent = false;
+        QObject context;
+        connect(
+            &fixture.m_grabber,
+            &QVideoSink::videoFrameChanged,
+            &context,
+            [&](const QVideoFrame &frame) {
+                // Two null images compare equal, so skip frames until we know
+                // the expected image.
+                if (anyNewFrameMatchesNewContent || expectedGridImage.isNull())
+                    return;
+                const QImage image = frame.toImage();
+                if (image.convertToFormat(expectedGridImage.format()) == expectedGridImage)
+                    anyNewFrameMatchesNewContent = true;
+            });
+
+        fixture.m_widget.setDisplayPattern(TestWidget::Pattern::Grid);
+        expectedGridImage = fixture.m_widget.grabImage();
+
+        QTRY_VERIFY_WITH_TIMEOUT(
+            anyNewFrameMatchesNewContent,
+            surfaceCaptureTestTimeout());
+    }
+
+    void sequenceOfCapturedImages_compareEqual_whenWindowContentIsUnchanged()
+    {
+        if (isWindows)
+            QSKIP(
+                "Windows does not emit frames if content is unchanged. "
+                "Cannot test framerates reliably in CI. QTBUG-147051");
+
+        if (isMacOS)
+            QSKIP(
+                "The macOS ScreenCaptureKit backend will often not emit "
+                "new frames if content is unchanged");
+
+        WindowCaptureWithWidgetFixture fixture;
+        QVERIFY(fixture.start());
+
+        const std::vector<QVideoFrame> frames = fixture.m_grabber.waitAndTakeVideoFrames(10);
+        QVERIFY(!frames.empty());
+
+        QImage firstFrame = frames.front().toImage();
+        QVERIFY(!firstFrame.isNull());
+
+        qsizetype index = 0;
+        for (const auto &frame : std::as_const(frames)){
+            QVERIFY(fixture.compareImages(frame.toImage(), firstFrame, QString::number(index)));
+            ++index;
+        }
+    }
+
+    void recorder_encodesFrames_toValidMediaFile_data()
+    {
+        QTest::addColumn<QSize>("windowSize");
+        //QTest::newRow("empty-window") << QSize{ 0, 0 };           TODO: Crash
+        //QTest::newRow("single-pixel-window") << QSize{ 1, 1 };    TODO: Crash
+        QTest::newRow("small-window") << QSize{ 60, 40 };
+        QTest::newRow("big-window") << QSize{ 800, 600 };
+
+        if (!skipOddSizedWindows()) {
+            QTest::newRow("odd-width-window") << QSize{ 61, 40 };
+            QTest::newRow("odd-height-window") << QSize{ 60, 41 };
+        }
+    }
+
+    void recorder_encodesFrames_toValidMediaFile()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        QFETCH(QSize, windowSize);
+
+        WindowCaptureWithWidgetAndRecorderFixture fixture;
+        fixture.start(windowSize);
+
+        // Wait on grabber to ensure that video recorder also get some frames
+        std::ignore = fixture.m_grabber.waitAndTakeFrameInfos(60);
+
+        // Wait for recorder finalization
+        fixture.stop();
+
+        QVERIFY(fixture.m_recorderErrors.empty());
+        QVERIFY(QFile{ fixture.m_mediaFile }.exists());
+        QVERIFY(fixture.testVideoFilePlayback(fixture.m_mediaFile));
+    }
+
+    void recorder_encodesFrames_toValidMediaFile_whenWindowResizes_data()
+    {
+        QTest::addColumn<int>("increment");
+        QTest::newRow("shrink") << -1;
+        QTest::newRow("grow") << 1;
+    }
+
+    void recorder_encodesFrames_toValidMediaFile_whenWindowResizes()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        QFETCH(int, increment);
+
+        QSize windowSize = { 200, 150 };
+        WindowCaptureWithWidgetAndRecorderFixture fixture;
+        fixture.start(windowSize, /*toggle pattern*/ false);
+
+        for (qsizetype i = 0; i < 20; ++i) {
+            windowSize.setWidth(windowSize.width() + increment);
+            windowSize.setHeight(windowSize.height() + increment);
+            fixture.m_widget.setSize(windowSize);
+
+            // Wait on grabber to ensure that video recorder also get some frames
+            std::ignore = fixture.m_grabber.waitAndTakeFrameInfos(1);
+        }
+
+        // Wait for recorder finalization
+        fixture.stop();
+
+        QVERIFY(fixture.m_recorderErrors.empty());
+        QVERIFY(QFile{ fixture.m_mediaFile }.exists());
+        QVERIFY(fixture.testVideoFilePlayback(fixture.m_mediaFile));
+    }
+
+    void recorder_recordingHasExpectedDuration_whenWindowIsSwitched()
+    {
+        // How long we keep each of the two sources active while recording.
+        constexpr auto sourceDuration = 2s;
+
+        const QSize windowSize{ 200, 150 };
+
+        // Animated content, so that both sources keep producing new frames.
+        TestWidget secondWidget;
+        secondWidget.setSize(windowSize);
+        secondWidget.setDisplayPattern(TestWidget::Pattern::Animated);
+        secondWidget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&secondWidget, surfaceCaptureTestTimeout()));
+
+        const std::optional<QCapturableWindow> secondWindow =
+            WindowCaptureWithWidgetFixture::findCaptureWindow(
+                secondWidget.windowTitle(),
+                secondWidget.windowHandle());
+        QVERIFY(secondWindow && secondWindow->isValid());
+
+        WindowCaptureWithWidgetAndRecorderFixture fixture;
+        fixture.start(windowSize);
+
+        // Make sure we are both capturing and recording before we start timing.
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+        QTRY_COMPARE_WITH_TIMEOUT(
+            fixture.m_recorderState,
+            QMediaRecorder::RecorderState::RecordingState,
+            surfaceCaptureTestTimeout());
+
+        QElapsedTimer recordingTimer;
+        recordingTimer.start();
+
+        QTest::qWait(sourceDuration);
+
+        fixture.m_capture.setWindow(*secondWindow);
+        QVERIFY(fixture.m_capture.isActive());
+
+        QTest::qWait(sourceDuration);
+
+        const milliseconds expectedDuration{ recordingTimer.elapsed() };
+
+        QVERIFY(fixture.stop());
+
+        QVERIFY(fixture.m_errors.empty());
+        QVERIFY(fixture.m_recorderErrors.empty());
+
+        const std::optional<MediaInfo> info =
+            MediaInfo::create(QUrl::fromLocalFile(fixture.m_mediaFile));
+        QVERIFY(info);
+
+        // Allow some slack for the time it takes to start and switch streams.
+        const milliseconds tolerance = expectedDuration / 4;
+        QVERIFY2(
+            std::chrono::abs(info->m_duration - expectedDuration) <= tolerance,
+            qPrintable(u"Recording lasted %1ms, but sources were active for %2ms"_s
+                .arg(info->m_duration.count())
+                .arg(expectedDuration.count())));
+    }
+
+    // Switching the captured window ends the stream of the old source. This must
+    // not be treated as the end of the input, so the recorder must not auto-stop.
+    void recorder_doesNotAutoStop_whenWindowIsSwitched()
+    {
+        const QSize windowSize{ 200, 150 };
+
+        // Animated content, so that both sources keep producing new frames.
+        TestWidget secondWidget;
+        secondWidget.setSize(windowSize);
+        secondWidget.setDisplayPattern(TestWidget::Pattern::Animated);
+        secondWidget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&secondWidget, surfaceCaptureTestTimeout()));
+
+        const std::optional<QCapturableWindow> secondWindow =
+            WindowCaptureWithWidgetFixture::findCaptureWindow(
+                secondWidget.windowTitle(),
+                secondWidget.windowHandle());
+        QVERIFY(secondWindow && secondWindow->isValid());
+
+        WindowCaptureWithWidgetAndRecorderFixture fixture;
+        fixture.m_recorder.setAutoStop(true);
+        fixture.start(windowSize);
+
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+        QTRY_COMPARE_WITH_TIMEOUT(
+            fixture.m_recorderState,
+            QMediaRecorder::RecorderState::RecordingState,
+            surfaceCaptureTestTimeout());
+
+        QSignalSpy recorderStateChanges{
+            &fixture.m_recorder,
+            &QMediaRecorder::recorderStateChanged
+        };
+
+        fixture.m_capture.setWindow(*secondWindow);
+        QVERIFY(fixture.m_capture.isActive());
+
+        // Give the recorder time to process frames from the new source.
+        QVERIFY(fixture.m_grabber.waitAndTakeFrameInfos(10).size() >= 10);
+
+        QVERIFY(recorderStateChanges.empty());
+        QCOMPARE(fixture.m_recorder.recorderState(), QMediaRecorder::RecorderState::RecordingState);
+
+        // Deactivating the capture ends the input, which must trigger auto-stop.
+        // This ensures that auto-stop works at all in this setup.
+        fixture.m_capture.setActive(false);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            fixture.m_recorderState,
+            QMediaRecorder::RecorderState::StoppedState,
+            surfaceCaptureTestTimeout());
+
+        QVERIFY(fixture.m_errors.empty());
+        QVERIFY(fixture.m_recorderErrors.empty());
+    }
+
+    void recorder_autoStops_whenWindowCaptureIsDeactivated()
+    {
+        WindowCaptureWithWidgetAndRecorderFixture fixture;
+        startRecordingWithAutoStop(fixture);
+        if (QTest::currentTestFailed())
+            return;
+
+        fixture.m_capture.setActive(false);
+
+        verifyRecorderAutoStopped(fixture);
+    }
+
+    void recorder_autoStops_whenWindowCaptureIsDestroyed()
+    {
+        WindowCaptureWithWidgetAndRecorderFixture fixture;
+        startRecordingWithAutoStop(fixture);
+        if (QTest::currentTestFailed())
+            return;
+
+        fixture.m_captureStorage.reset();
+
+        verifyRecorderAutoStopped(fixture);
+    }
+
+    void recorder_autoStops_whenWindowCaptureIsRemovedFromCaptureSession()
+    {
+        WindowCaptureWithWidgetAndRecorderFixture fixture;
+        startRecordingWithAutoStop(fixture);
+        if (QTest::currentTestFailed())
+            return;
+
+        fixture.m_session.setWindowCapture(nullptr);
+
+        verifyRecorderAutoStopped(fixture);
+    }
+
+    void windowCapture_capturesWindowsInOtherProcesses()
+    {
+        QSKIP_FFMPEG("QTBUG-151355: fails on Windows CI with audio device present");
+
+        if (isMacOS) {
+            QSKIP("Separate process tests do not work on macOS "
+                  "because they are launched without bundle identifiers");
+        }
+
+        WindowCaptureWithWidgetInOtherProcessFixture fixture;
+        fixture.m_grabber.setRetainFirstVideoFrame(true);
+        QVERIFY(fixture.start());
+
+        // Get reference image from our in-process widget
+        const QImage expected = fixture.m_widget.grabImage();
+
+        // Get actual image grabbed from out-of-process widget
+        const std::optional<QVideoFrame> frame = fixture.consumeFirstVideoFrame();
+        QVERIFY(frame);
+        const QImage actual = frame->toImage();
+
+        QVERIFY(fixture.compareImages(actual, expected));
+    }
+
+    /*
+        This test is not a requirement per se, but we want all platforms
+        to behave the same. A reasonable alternative could have been to
+        treat closed window as a regular 'Stop' capture (not an error).
+    */
+    void windowCapture_stopsWithError_whenProcessCloses()
+    {
+        if (isMacOS) {
+            QSKIP("Separate process tests do not work on macOS "
+                  "because they are launched without bundle identifiers");
+        }
+
+        WindowCaptureWithWidgetInOtherProcessFixture fixture;
+        QVERIFY(fixture.start());
+
+        // Get capturing started
+        QVERIFY(fixture.tryWaitForFirstFrameInfo());
+
+        // Closing the process waits for it to exit
+        fixture.m_windowProcess.close();
+
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !fixture.m_errors.empty(),
+            surfaceCaptureTestTimeout());
+
+        // TODO: Verify that the QWindowCapture goes inactive whenever we encounter an error
+        // like this.
+        // QVERIFY(!windowCapture.isActive());
+
+        // TODO: Enforce specific error code when a window is lost and capture stops.
+        // Need to investigate if this is a case we can specifically detect on all platforms.
+    }
+};
+
+// QTEST_MAIN defines main, but we want to override it, so ensure that it emits
+// `testlib_main` instead of `main`
+#define main testlib_main
+QTEST_MAIN(tst_QWindowCaptureBackend)
+#undef main
+
+int main(int argc, char *argv[])
+{
+    QCommandLineParser cmd;
+    const QCommandLineOption showTestWidget{ QStringList{ "show" },
+                                             "Creates a test widget with given title",
+                                             "windowTitle" };
+    cmd.addOption(showTestWidget);
+    cmd.parse({ argv, argv + argc });
+
+    if (cmd.isSet(showTestWidget)) {
+        QApplication app{ argc, argv };
+        const QString windowTitle = cmd.value(showTestWidget);
+        const bool result = showCaptureWindow(windowTitle);
+        return result ? 0 : 1;
+    }
+
+    return testlib_main(argc, argv);
+}
+
+#include "tst_qwindowcapturebackend.moc"

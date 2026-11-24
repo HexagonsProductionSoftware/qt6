@@ -1,0 +1,157 @@
+// Copyright (C) 2026 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only WITH Qt-GPL-exception-1.0
+
+#ifndef QDOC_IR_MEMBER_H
+#define QDOC_IR_MEMBER_H
+
+#include "contentblock.h"
+#include "signaturespan.h"
+#include "qdoc/access.h"
+#include "qdoc/genustypes.h"
+#include "qdoc/status.h"
+
+#include <QJsonObject>
+#include <QList>
+#include <QString>
+
+QT_BEGIN_NAMESPACE
+
+namespace IR {
+
+struct ParameterIR {
+    QString type;
+    QString name;
+    QString defaultValue;
+    [[nodiscard]] QJsonObject toJson() const;
+};
+
+struct EnumValueIR {
+    QString name;
+    QString value;
+    QString since;
+    [[nodiscard]] QJsonObject toJson() const;
+};
+
+struct SharedDetailGroup {
+    int firstIndex { -1 };
+    int count { 0 };
+    Status status { Status::Active };
+    bool isPlural { false };
+    // The page fragment the group itself is reachable at, such as
+    // "font-prop" for a named QML property group. Empty when the group
+    // has no anchor of its own (an anonymous shared comment) or when
+    // the fragment is already owned by another destination on the page.
+    QString anchorId;
+    QString deprecatedSince;
+    QString typeNoun;
+    QString deprecatedSinceQualified;
+    QList<ContentBlock> body;
+    QList<ContentBlock> alsoList;
+    [[nodiscard]] QJsonObject toJson() const;
+};
+
+struct MemberIR {
+    QString name;
+    QString fullName;
+    QString signature;
+    QString href;
+    QString brief;
+
+    NodeType nodeType { NodeType::NoType };
+    Access access { Access::Public };
+    Status status { Status::Active };
+
+    QString deprecatedSince;
+    QString typeNoun;
+    QString deprecatedSinceQualified;
+
+    QList<ParameterIR> parameters;
+    int overloadNumber { 0 };
+    bool isPrimaryOverload { true };
+
+    QList<EnumValueIR> enumValues;
+
+    bool isStatic { false };
+    bool isConst { false };
+    bool isVirtual { false };
+    bool isSignal { false };
+    bool isSlot { false };
+
+    // QML property attributes
+    bool isAttached { false };
+    bool isDefault { false };
+    bool isReadOnly { false };
+    bool isRequired { false };
+    QString dataType;
+
+    // Detail documentation (populated for detail sections, empty for summary)
+    QString anchorId;
+    QString synopsis;
+    QList<IR::SignatureSpan> signatureSpans;
+    QString since;
+    QString threadSafety;
+    QString comparisonCategory;
+    bool isNoexcept { false };
+    QString noexceptNote;
+    QList<ContentBlock> body;
+    QList<ContentBlock> alsoList;
+
+    // Index of the section's shared detail group this member belongs to,
+    // or -1 when the member carries its own body and see-also content.
+    int sharedGroup { -1 };
+
+    [[nodiscard]] QJsonObject toJson() const;
+};
+
+struct InheritedMembersIR {
+    QString className;
+    int count { 0 };
+    QString href;
+    [[nodiscard]] QJsonObject toJson() const;
+};
+
+struct SectionIR {
+    QString id;
+    QString title;
+    QString singular;
+    QString plural;
+    QList<MemberIR> members;
+    QList<MemberIR> reimplementedMembers;
+    QList<InheritedMembersIR> inheritedMembers;
+    // Shared detail groups whose members appear in \c members; each group
+    // carries the documentation its children share, stored once.
+    QList<SharedDetailGroup> sharedGroups;
+    [[nodiscard]] QJsonObject toJson() const;
+};
+
+struct AllMemberEntry {
+    QString signature;
+    QList<IR::SignatureSpan> signatureSpans;
+    QString href;
+    QStringList hints;
+    bool isPropertyGroup { false };
+    QList<AllMemberEntry> children;
+    [[nodiscard]] QJsonObject toJson() const;
+};
+
+struct MemberGroup {
+    QString typeName;
+    QString typeHref;
+    QList<AllMemberEntry> members;
+    [[nodiscard]] QJsonObject toJson() const;
+};
+
+struct AllMembersIR {
+    QString typeName;
+    QString typeHref;
+    bool isQmlType { false };
+    QList<AllMemberEntry> members;
+    QList<MemberGroup> memberGroups;
+    [[nodiscard]] QJsonObject toJson() const;
+};
+
+} // namespace IR
+
+QT_END_NAMESPACE
+
+#endif // QDOC_IR_MEMBER_H

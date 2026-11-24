@@ -1,0 +1,75 @@
+# Copyright (C) 2024 The Qt Company Ltd.
+# SPDX-License-Identifier: BSD-3-Clause
+
+@PACKAGE_INIT@
+
+cmake_minimum_required(VERSION @min_new_policy_version@...@max_new_policy_version@)
+
+include(CMakeFindDependencyMacro)
+
+# The files below use helper functions from the @INSTALL_CMAKE_NAMESPACE@ package. Include the
+# file that provides them, unless they are available already.
+if(NOT COMMAND _qt_internal_should_include_targets)
+    set(__qt_@target@_helpers_file_name "@INSTALL_CMAKE_NAMESPACE@PublicHelpers.cmake")
+    unset(__qt_@target@_helpers_file)
+    foreach(__qt_@target@_dir IN ITEMS
+            "${CMAKE_CURRENT_LIST_DIR}/../@INSTALL_CMAKE_NAMESPACE@"
+            "${QT_TOOLCHAIN_RELOCATABLE_CMAKE_DIR}/@INSTALL_CMAKE_NAMESPACE@")
+        if(EXISTS "${__qt_@target@_dir}/${__qt_@target@_helpers_file_name}")
+            set(__qt_@target@_helpers_file
+                "${__qt_@target@_dir}/${__qt_@target@_helpers_file_name}")
+            break()
+        endif()
+    endforeach()
+
+    if(NOT DEFINED __qt_@target@_helpers_file)
+        set(${CMAKE_FIND_PACKAGE_NAME}_FOUND FALSE)
+        set(${CMAKE_FIND_PACKAGE_NAME}_NOT_FOUND_MESSAGE
+"${CMAKE_FIND_PACKAGE_NAME} could not be found because \
+${__qt_@target@_helpers_file_name} of the @INSTALL_CMAKE_NAMESPACE@ package was not found. Call \
+find_package(@INSTALL_CMAKE_NAMESPACE@) before find_package(${CMAKE_FIND_PACKAGE_NAME}).")
+        return()
+    endif()
+
+    include("${__qt_@target@_helpers_file}")
+
+    unset(__qt_@target@_helpers_file)
+    unset(__qt_@target@_helpers_file_name)
+endif()
+
+# Find required dependencies, if any.
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/@INSTALL_CMAKE_NAMESPACE@@target@Dependencies.cmake")
+    include("${CMAKE_CURRENT_LIST_DIR}/@INSTALL_CMAKE_NAMESPACE@@target@Dependencies.cmake")
+endif()
+
+# If *Dependencies.cmake exists, the variable value will be defined there.
+# Don't override it in that case.
+if(NOT DEFINED "@INSTALL_CMAKE_NAMESPACE@@target@_FOUND")
+    set("@INSTALL_CMAKE_NAMESPACE@@target@_FOUND" TRUE)
+endif()
+
+set(__qt_@target@_should_include_targets_code "@QT_SHOULD_INCLUDE_TARGETS_CODE@")
+
+# Do the checks inside Targets.cmake even when the file is still being generated
+if(__qt_@target@_should_include_targets_code)
+    include("${CMAKE_CURRENT_LIST_DIR}/@INSTALL_CMAKE_NAMESPACE@@target@TargetsPrecheck.cmake")
+endif()
+
+if(NOT __qt_@target@_skip_include_targets_file
+        AND @INSTALL_CMAKE_NAMESPACE@@target@_FOUND
+        AND __qt_@target@_should_include_targets_code
+    )
+    include("${CMAKE_CURRENT_LIST_DIR}/@INSTALL_CMAKE_NAMESPACE@@target@Targets.cmake")
+    include("${CMAKE_CURRENT_LIST_DIR}/@INSTALL_CMAKE_NAMESPACE@@target@AdditionalTargetInfo.cmake")
+    if(NOT QT_NO_CREATE_VERSIONLESS_TARGETS)
+        include("${CMAKE_CURRENT_LIST_DIR}/@INSTALL_CMAKE_NAMESPACE@@target@VersionlessTargets.cmake")
+    endif()
+    set(__qt_@target@_targets_file_included ON)
+endif()
+
+set(__qt_@target@_extra_cmake_includes "@extra_cmake_includes@")
+foreach(extra_cmake_include IN LISTS __qt_@target@_extra_cmake_includes)
+    include("${CMAKE_CURRENT_LIST_DIR}/${extra_cmake_include}")
+endforeach()
+
+@extra_cmake_statements@

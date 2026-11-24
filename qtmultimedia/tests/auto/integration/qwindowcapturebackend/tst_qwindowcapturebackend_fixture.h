@@ -1,0 +1,191 @@
+// Copyright (C) 2023 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+
+#ifndef TST_QWINDOWCAPTUREBACKEND_FIXTURE_H
+#define TST_QWINDOWCAPTUREBACKEND_FIXTURE_H
+
+#include "tst_qwindowcapturebackend_widget.h"
+
+#include <QtCore/qobject.h>
+#include <QtCore/qprocess.h>
+
+#include <QtMultimedia/qmediacapturesession.h>
+#include <QtMultimedia/qmediarecorder.h>
+#include <QtMultimedia/qvideoframe.h>
+#include <QtMultimedia/qwindowcapture.h>
+
+#include <QtMultimediaTestLib/private/framegrabber_p.h>
+#include <QtMultimediaTestLib/private/mediabackendutils_p.h>
+#include <QtMultimediaTestLib/private/surfacecapturetestutils_p.h>
+
+#include <QtTest/qtest.h>
+#include <QtTest/qsignalspy.h>
+
+#include <chrono>
+#include <memory>
+#include <optional>
+
+/*!
+    Utility used to hide application cursor for image comparison tests.
+    On Windows, the mouse cursor is captured as part of the window capture.
+    This and can cause differences when comparing captured images with images
+    from QWindow::grab() which is used as a reference.
+*/
+struct DisableCursor final
+{
+    DisableCursor();
+    ~DisableCursor();
+
+    DisableCursor(const DisableCursor &) = delete;
+    DisableCursor &operator=(const DisableCursor &) = delete;
+};
+
+/*!
+    For some backends (e.g ScreenCaptureKit) has a minor delay
+    between modifying QWindow geometry before the change is
+    reflected in that backend. This enum is used to tell
+    the Fixture whether it should insert a short delay
+    in between revealing the window and starting the capture.
+*/
+enum class FirstFrameSizePolicy {
+    MayLagWindowSize,
+    MustMatchWindowSize,
+};
+
+/*!
+    Fixture class that orchestrates setup/teardown of window capturing
+*/
+class WindowCaptureFixture : public QObject
+{
+    Q_OBJECT
+
+public:
+    WindowCaptureFixture();
+
+    /*!
+        Compare two images, ignoring format.
+        If images differ, diagnostic output is logged and images are saved to file.
+    */
+    static bool compareImages(QImage actual, const QImage &expected,
+                              const QString &fileSuffix = "");
+
+    /*!
+        Waits for the first frame of the current stream.
+        See FrameGrabber::tryWaitForFirstFrameInfo().
+    */
+    [[nodiscard]] std::optional<QtMultimediaTest::VideoFrameInfo> tryWaitForFirstFrameInfo();
+
+    /*!
+        Same as tryWaitForFirstFrameInfo(), but returns the video frame itself.
+        Requires m_grabber.setRetainFirstVideoFrame(true) before starting the capture.
+        See FrameGrabber::consumeFirstVideoFrame().
+    */
+    [[nodiscard]] std::optional<QVideoFrame> consumeFirstVideoFrame();
+
+    void waitForWindowGeometryToSettle(FirstFrameSizePolicy policy) const;
+
+    QMediaCaptureSession m_session;
+    std::unique_ptr<QWindowCapture> m_captureStorage = QtMultimediaTest::makeWindowCapture();
+    QWindowCapture &m_capture = *m_captureStorage;
+    QtMultimediaTest::FrameGrabber m_grabber;
+
+    QSignalSpy m_errors{ &m_capture, &QWindowCapture::errorOccurred };
+    QSignalSpy m_activations{ &m_capture, &QWindowCapture::activeChanged };
+    QSignalSpy m_frameRates{ &m_capture, &QWindowCapture::maximumFrameRateChanged };
+
+    // Delay to wait for a window geometry change to be reflected by the capture
+    // backend. Mostly useful for tests that require the very first frame of the
+    // stream to have correct size.
+    static std::chrono::milliseconds windowGeometrySettleDelay;
+
+private:
+    /*!
+        Calculate a result path based upon a single filename.
+        On CI, the file will be located in COIN_CTEST_RESULTSDIR, and on developer
+        computers, the file will be located in TEMP.
+
+        The file name is on the form "testCase_testFunction_[dataTag_]fileName"
+    */
+    static QString getResultsPath(const QString &fileName);
+};
+
+/*!
+    Fixture class that extends window capture fixture with a capturable widget
+*/
+class WindowCaptureWithWidgetFixture : public WindowCaptureFixture
+{
+    Q_OBJECT
+
+public:
+    /*!
+        Starts capturing and returns true if successful.
+
+        Two phase initialization is used to be able to detect
+        failure to find widget window as a capturable window.
+    */
+    bool start(
+        QSize size = { 60, 40 },
+        FirstFrameSizePolicy firstFrameSizePolicy = FirstFrameSizePolicy::MayLagWindowSize);
+
+    void resizeWidget(
+        QSize size,
+        FirstFrameSizePolicy firstFrameSizePolicy = FirstFrameSizePolicy::MayLagWindowSize)
+    {
+        m_widget.setSize(size);
+        waitForWindowGeometryToSettle(firstFrameSizePolicy);
+    }
+
+    DisableCursor m_cursorDisabled; // Avoid mouse cursor causing image differences
+    TestWidget m_widget;
+    QCapturableWindow m_captureWindow;
+
+    [[nodiscard]] static std::optional<QCapturableWindow> findCaptureWindow(
+        const QString &windowTitle,
+        QWindow *sourceWindow = nullptr);
+};
+
+class WindowCaptureWithWidgetInOtherProcessFixture : public WindowCaptureWithWidgetFixture
+{
+    Q_OBJECT
+
+public:
+    ~WindowCaptureWithWidgetInOtherProcessFixture() { m_windowProcess.close(); }
+
+    /*!
+        Create widget in separate process and start capturing its content
+    */
+    bool start();
+
+    QProcess m_windowProcess;
+};
+
+class WindowCaptureWithWidgetAndRecorderFixture : public WindowCaptureWithWidgetFixture
+{
+    Q_OBJECT
+
+public:
+    void start(QSize size = { 60, 40 }, bool togglePattern = true);
+
+    /*!
+        Stop recording.
+
+        Since recorder finalizes the file asynchronously, even after destructors are called,
+        we need to explicitly wait for the stopped state before ending the test. If we don't
+        do this, the media file can not be deleted by the QTemporaryDir at destruction.
+    */
+    bool stop();
+
+    bool testVideoFilePlayback(const QString& fileName);
+
+public slots:
+    void recorderStateChanged(QMediaRecorder::RecorderState state);
+
+public:
+    QTemporaryDir m_tempDir;
+    const QString m_mediaFile = m_tempDir.filePath("test.mp4");
+    QMediaRecorder m_recorder;
+    QMediaRecorder::RecorderState m_recorderState = QMediaRecorder::StoppedState;
+    QSignalSpy m_recorderErrors{ &m_recorder, &QMediaRecorder::errorOccurred };
+};
+
+#endif

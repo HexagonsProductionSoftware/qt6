@@ -1,0 +1,17 @@
+# Copyright (C) 2022 The Qt Company Ltd.
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Generated from unit.pro.
+
+add_subdirectory(mockbackend)
+add_subdirectory(multimedia)
+if(TARGET Qt::Quick AND TARGET Qt::QuickTest)
+    add_subdirectory(multimediaquick)
+endif()
+if(TARGET Qt::Widgets)
+    add_subdirectory(multimediawidgets)
+endif()
+if(QT_FEATURE_spatialaudio)
+    add_subdirectory(spatialaudio)
+endif()
+add_subdirectory(plugins)
